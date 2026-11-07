@@ -10,7 +10,7 @@ reached over a JSON-lines pipe, instead of a 9P file share plus a spawn per comm
 
 | | |
 | --- | --- |
-| Version | 0.1.4 |
+| Version | 0.1.5 |
 | Harness | DeepSeek Harness `0.2.1-rc.5` (desktop & web) |
 | Node | `>= 22` |
 | Distro | any WSL2 distro (tested on Ubuntu 26.04) |
@@ -192,6 +192,17 @@ pnpm add "dsh-wsl-suite@github:stallenlu/dsh-wsl-suite"
 `github:` specs are fetched as a tarball, so the copy is replaced wholesale on every
 push — no `file:`-style remove/reinstall dance.
 
+**Prebuilt release tarball.** Each release also attaches a ready-to-install
+`dsh-wsl-suite.tgz` (no build step, so it skips the `allowBuilds` approval):
+
+```sh
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.5/dsh-wsl-suite.tgz
+```
+
+The asset name carries no version number and the URL is pinned to a tag, so the
+link never rots when a later release is published. The awesome-dsh-plugin
+catalog entry points at this URL as its `tarball:` fallback.
+
 One naming rule worth knowing, because violating it breaks the boot silently: **the
 client bundle's registration id must equal the package name.** The host keys its client
 boot graph by package name (`dsh-client-modules/lib/index.js` `this.table.set(packageName, …)`),
@@ -204,7 +215,7 @@ the bundle banner, and `tests/client.test.ts` asserts it matches `package.json`.
 
 ```text
 # source of truth — edit here
-C:\Users\GT14\Documents\deepseek-harness\wsl-rework\next\
+C:\Users\GT14\Documents\deepseek-harness\default-workspace\dsh-wsl-suite-src\
 # the copy the harness actually loads (a FILE COPY, not a symlink)
 C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 ```
@@ -212,9 +223,9 @@ C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 Because the installed copy is a copy, every source change needs a reinstall; from a
 DeepSeek Harness session:
 
-1. `npm run verify` in the source tree (typecheck + build + 60 checks).
+1. `npm run verify` in the source tree (typecheck + build + 68 checks).
 2. `plugin_manager remove_bundle target=dsh-wsl-suite`, then
-   `plugin_manager install_bundle target=file:C:\Users\GT14\Documents\deepseek-harness\wsl-rework\next`.
+   `plugin_manager install_bundle target=file:C:\Users\GT14\Documents\deepseek-harness\default-workspace\dsh-wsl-suite-src`.
 3. Restart DSH (the reinstall answers `application: "restart-required"`).
 4. If the entry ever disappears again: check `dsh.profile.bundles` in
    `C:\Users\GT14\.dsh\profiles\desktop\package.json` still contains `dsh-wsl-suite`
@@ -237,9 +248,9 @@ entries proves the whole pipe.
 
 ```sh
 npm install          # devDependencies pin the 0.2.1-rc.5 host surface
-npm run typecheck
-npm run build        # lib/{index,fs,shell,search,client}.js
-npm test             # 60 checks; live ones skip when no distro is present
+npm run typecheck    # also needs @deepseek-ai/dsh-llm (pinned in devDependencies)
+npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
+npm test             # 68 checks; live ones skip when no distro is present
 npm run verify       # typecheck, then build + test
 ```
 
