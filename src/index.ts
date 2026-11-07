@@ -20,6 +20,12 @@
  *    whose cwd is a WSL path, so a plain Linux `workdir` reaches the right
  *    distribution.
  *
+ * 4. **A default preset for WSL workspaces.** The host has one global default
+ *    preset and no per-workspace one, so `sessionController.create` is wrapped
+ *    to fill in the WSL variant when a new session's workspace lives in WSL and
+ *    the caller left `agentPreset` unset. An explicit pick still wins; this is
+ *    a default, not a mode.
+ *
  * There is no poller anywhere in this file. The reference swept the UNC share
  * every 3 s and re-walked discovery every 30 s; each sweep is ~200 ms of 9P
  * traffic and, with WSLg enabled, resurrects the distribution and steals
@@ -40,6 +46,7 @@ import { ChannelError, channelFor, closeAll } from './channel.ts'
 import { clearHostGate, isWslVariantId, parseRows, transformVariant, variantIdFor } from './host/variants.ts'
 import { parseUnc, resolveAddress, toUnc } from './paths.ts'
 import { wslWorldGroup, type Row } from './rows.ts'
+import { applyDefaultPreset, type VariantCatalog } from './defaultPreset.ts'
 import { applyTerminal } from './terminal.ts'
 
 export const name = 'dsh-wsl'
@@ -55,10 +62,13 @@ export const inject = ['webServer']
 export interface Config {
   /** HTTP path the browser dialog calls. */
   route: string
+  /** New WSL-workspace sessions start in this preset; empty disables the default. */
+  defaultPreset: string
 }
 
 export const Config: z<Config> = z.object({
   route: z.string().default('/dsh-wsl/api'),
+  defaultPreset: z.string().default('wsl-standard'),
 })
 
 const DEFAULT_ROUTE = '/dsh-wsl/api'
@@ -466,12 +476,20 @@ export function apply(ctx: Context, config: Config): void {
     })
   }, 'dsh-wsl: browser route')
 
+  // Variants are published asynchronously at boot; the create wrapper reads
+  // this live set to know whether the configured default preset exists yet.
+  const catalog: VariantCatalog = { ids: new Set<string>() }
+
   const presets = ctx.get('agentPresets') as unknown as PresetsService | undefined
   if (presets !== undefined && typeof presets.readDocument === 'function') {
     ctx.effect(() => {
-      void materialize(ctx, presets).catch((error: unknown) => {
-        console.error(`dsh-wsl: preset variants failed: ${messageOf(error)}`)
-      })
+      void materialize(ctx, presets)
+        .then((outcome) => {
+          for (const id of outcome.produced) catalog.ids.add(id)
+        })
+        .catch((error: unknown) => {
+          console.error(`dsh-wsl: preset variants failed: ${messageOf(error)}`)
+        })
       return () => {}
     }, 'dsh-wsl: preset variants')
   }
@@ -499,6 +517,14 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   applyTerminal(ctx)
+
+  // A WSL workspace's "new session" action leaves `agentPreset` unset, so give
+  // it the WSL variant instead of the host's Windows `standard` default. An
+  // empty config value disables this. The wrapper is installed lazily and reads
+  // `catalog.ids` at request time, so it does not matter that the variants are
+  // still being published when this runs.
+  const targetId = config.defaultPreset
+  if (targetId !== '') applyDefaultPreset(ctx, targetId, catalog)
 
   ctx.effect(() => () => void closeAll(), 'dsh-wsl: close agent channels')
 }

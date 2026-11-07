@@ -144,6 +144,12 @@ shell 方言必须随世界改变：发行版外 agent 跑 `pwsh`，发行版内
 孪生（`standard` → `wsl-standard`），其 shell 与文件工具换成 WSL 版。
 预设其余部分——人设、技能、任务、委派——原样带过。
 
+从 WSL 工作区新建会话现在会默认进入 `wsl-standard` 孪生变体，而不是宿主的
+Windows `standard`：插件包装了会话创建服务，当调用方未指定预设、且目标路径是
+WSL UNC 路径时，自动填入 `wsl-standard`。在新会话界面显式选择的预设始终优先，
+Windows 工作区不受影响。配置项 `defaultPreset`（默认 `wsl-standard`）指定该孪生；
+设为空字符串可保留宿主默认行为。若该孪生尚未发布，请求会原样透传。
+
 变换按 `id` 在解析后的文档里匹配行，因此对原版那种「嵌套 `subagent` 行
 不可见」（`tool "subagent" is already registered in this scope`）的缩进脆弱
 性免疫。它还会把被抬进 world 的行上的 `disabled: !!js

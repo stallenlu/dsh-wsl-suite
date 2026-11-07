@@ -1,6 +1,7 @@
 # local harness install artifacts
 node_modules/
 lib/
+*.tgz
 
 # probe scripts: machine-specific paths, not part of the plugin
 scratch/

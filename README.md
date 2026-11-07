@@ -152,6 +152,14 @@ preset in the profile gets a `wsl-<mode>` twin (`standard` → `wsl-standard`) w
 and file tools are the WSL ones. The rest of the preset — persona, skills, jobs,
 delegation — is carried through untouched.
 
+Creating a session from a WSL workspace now starts it in the `wsl-standard` twin
+instead of the host's Windows `standard`: the plugin wraps the session-create service
+and, when the caller left the preset unset and the target path is a WSL UNC path,
+fills in `wsl-standard`. A preset chosen explicitly on the new-session screen always
+wins, and a Windows workspace is left untouched. The config field `defaultPreset`
+(default `wsl-standard`) names that twin; set it to an empty string to keep the host
+default. If the twin has not been published yet, the request is passed through unchanged.
+
 The transform matches rows by `id` in the parsed document, which makes it immune to the
 indentation fragility that made a nested `subagent` row invisible to the original
 (`tool "subagent" is already registered in this scope`). It also clears a `disabled: !!js
