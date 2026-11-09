@@ -23,6 +23,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { parseUnc } from './paths.ts'
+import type { WorkspaceRegistryService } from './index.ts'
 
 /** A `session.create` request. Only the fields this module reads are declared. */
 export interface SessionCreateRequest {
@@ -36,21 +37,6 @@ export interface SessionCreateRequest {
 /** The slice of the host `sessionController` service this module wraps. */
 interface SessionControllerFace {
   create: (request: SessionCreateRequest) => Promise<unknown>
-}
-
-/** The slice of `workspaceRegistry` used to resolve a workspace id to a path. */
-interface WorkspaceLookup {
-  get(id: string): { path?: unknown } | undefined
-}
-
-/** The slice of `agentPresets` used to confirm the target variant exists. */
-interface RosterEntry {
-  id: string
-  broken?: string
-}
-
-interface PresetsRoster {
-  list(): Promise<RosterEntry[]>
 }
 
 /** WSL variants `materialize()` has published, shared with the wrapper. */
@@ -122,31 +108,18 @@ export function applyDefaultPreset(ctx: Context, targetId: string, catalog: Vari
     // registry and the preset roster may become active after this wrap is
     // installed, and `ctx.get` always reads the live store.
     const workspacePath = (id: string): string | undefined => {
-      const registry = scope.get('workspaceRegistry') as unknown as WorkspaceLookup | undefined
+      const registry = scope.get('workspaceRegistry') as unknown as WorkspaceRegistryService | undefined
       const path = registry?.get?.(id)?.path
       // `WorkspaceEntity.path` is a GETTER on the live object; read it here.
       return typeof path === 'string' ? path : undefined
     }
 
-    // `materialize()` publishes the variants asynchronously at boot. A session
-    // created before it finishes must still get the WSL default, so fall back
-    // to a live roster check and cache a positive answer. If even that is
-    // unavailable, the request passes through untouched (no broken compose).
-    const available = async (): Promise<boolean> => {
-      if (catalog.ids.has(targetId)) return true
-      const presets = scope.get('agentPresets') as unknown as PresetsRoster | undefined
-      if (presets === undefined || typeof presets.list !== 'function') return false
-      try {
-        const found = (await presets.list()).some((entry) => entry.id === targetId && entry.broken === undefined)
-        if (found) catalog.ids.add(targetId)
-        return found
-      } catch {
-        return false
-      }
-    }
-
-    controller.create = async (request) =>
-      inner.call(controller, wslDefaultPresetRequest(request, targetId, isWsl, workspacePath, await available()))
+    // `materialize()` publishes the variants asynchronously at boot and fills
+    // `catalog` with its results. A session created in that short window simply
+    // falls through to the host's global default; composing a preset that does
+    // not exist yet would throw, so the catalog is the single source of truth.
+    controller.create = (request) =>
+      inner.call(controller, wslDefaultPresetRequest(request, targetId, isWsl, workspacePath, catalog.ids.has(targetId)))
     PATCHED.set(controller, { original: inner, refs: 1 })
     scope.effect(() => () => {
       const entry = PATCHED.get(controller)

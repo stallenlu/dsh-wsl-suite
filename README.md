@@ -10,7 +10,7 @@ reached over a JSON-lines pipe, instead of a 9P file share plus a spawn per comm
 
 | | |
 | --- | --- |
-| Version | 0.1.5 |
+| Version | 0.1.6 |
 | Harness | DeepSeek Harness `0.2.1-rc.5` (desktop & web) |
 | Node | `>= 22` |
 | Distro | any WSL2 distro (tested on Ubuntu 26.04) |
@@ -196,7 +196,7 @@ push — no `file:`-style remove/reinstall dance.
 `dsh-wsl-suite.tgz` (no build step, so it skips the `allowBuilds` approval):
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.5/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.6/dsh-wsl-suite.tgz
 ```
 
 The asset name carries no version number and the URL is pinned to a tag, so the
@@ -215,7 +215,7 @@ the bundle banner, and `tests/client.test.ts` asserts it matches `package.json`.
 
 ```text
 # source of truth — edit here
-C:\Users\GT14\Documents\deepseek-harness\default-workspace\dsh-wsl-suite-src\
+E:\DshConfig\dsh-wsl-suite\
 # the copy the harness actually loads (a FILE COPY, not a symlink)
 C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 ```
@@ -223,9 +223,9 @@ C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 Because the installed copy is a copy, every source change needs a reinstall; from a
 DeepSeek Harness session:
 
-1. `npm run verify` in the source tree (typecheck + build + 68 checks).
+1. `npm run verify` in the source tree (typecheck + build + 72 checks).
 2. `plugin_manager remove_bundle target=dsh-wsl-suite`, then
-   `plugin_manager install_bundle target=file:C:\Users\GT14\Documents\deepseek-harness\default-workspace\dsh-wsl-suite-src`.
+   `plugin_manager install_bundle target=file:E:\DshConfig\dsh-wsl-suite`.
 3. Restart DSH (the reinstall answers `application: "restart-required"`).
 4. If the entry ever disappears again: check `dsh.profile.bundles` in
    `C:\Users\GT14\.dsh\profiles\desktop\package.json` still contains `dsh-wsl-suite`
@@ -250,7 +250,7 @@ entries proves the whole pipe.
 npm install          # devDependencies pin the 0.2.1-rc.5 host surface
 npm run typecheck    # also needs @deepseek-ai/dsh-llm (pinned in devDependencies)
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 68 checks; live ones skip when no distro is present
+npm test             # 72 checks; live ones skip when no distro is present
 npm run verify       # typecheck, then build + test
 ```
 

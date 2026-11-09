@@ -278,7 +278,10 @@ async function handle(req) {
       const entries = fs
         .readdirSync(req.p, { withFileTypes: true })
         .map((e) => ({ n: e.name, d: e.isDirectory(), l: e.isSymbolicLink() }))
-        .sort((a, b) => (a.n < b.n ? -1 : a.n > b.n ? 1 : 0))
+        // Same order the host browse dialog uses (dirs first, then locale name
+        // order) so `fs.listDir` and the dialog agree and the dialog's re-sort
+        // is a harmless no-op. See src/index.ts `case 'listDir'`.
+        .sort((a, b) => Number(b.d) - Number(a.d) || a.n.localeCompare(b.n))
       return reply({ id: req.id, ok: true, entries })
     }
 
@@ -306,8 +309,30 @@ async function handle(req) {
       if (dir !== req.p) fs.mkdirSync(dir, { recursive: true })
       // A sibling temp file plus rename is the atomic publication that works
       // everywhere — same directory, same filesystem, no hardlink required.
+      // Rename swaps the inode, though, so the new file starts with the
+      // process umask and loses an existing file's permission bits: editing a
+      // chmod +x script would silently drop its execute bit. Copy the old
+      // mode onto the temp file before the swap. On Windows a read-only target
+      // additionally makes rename fail with EPERM, so grant a temporary write
+      // bit there first — the temp file's mode wins after the swap.
+      let originalMode
+      try {
+        originalMode = fs.statSync(req.p).mode & 0o7777
+      } catch {
+        // No existing file: a fresh write has no mode to preserve.
+      }
       const tmp = `${req.p}.dsh-tmp-${process.pid}-${req.id}`
       fs.writeFileSync(tmp, data)
+      if (originalMode !== undefined) {
+        if (process.platform === 'win32') {
+          try {
+            fs.chmodSync(req.p, originalMode | 0o200)
+          } catch {
+            /* best effort; rename below reports a real failure */
+          }
+        }
+        fs.chmodSync(tmp, originalMode)
+      }
       try {
         fs.renameSync(tmp, req.p)
       } catch (error) {

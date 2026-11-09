@@ -74,7 +74,6 @@ export const Config: z<Config> = z.object({
 const DEFAULT_ROUTE = '/dsh-wsl/api'
 const MAX_BODY_BYTES = 64 * 1024
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1'])
-/** `wsl.exe` writes UTF-16LE; decoding as UTF-8 yields NUL-interleaved garbage. */
 
 // --- host seams this plugin consumes -------------------------------------
 // Neither shape is published by the installed packages, so they are declared
@@ -131,9 +130,13 @@ function plainWorkspace(workspace: { id: unknown; path: unknown; title: unknown;
   }
 }
 
-interface WorkspaceRegistryService {
+/** The slice of `workspaceRegistry` both the create route and the default-preset
+ * wrapper consume. `path` on a live entity is a GETTER, so callers must read it
+ * off the object returned by `get`, not off a serialized copy. */
+export interface WorkspaceRegistryService {
   create(path: string, title?: string): Promise<{ id: string; path: string; title: string }>
   resolveByPath(path: string): Promise<{ id: string; path: string; title: string } | undefined>
+  get(id: string): { path?: unknown } | undefined
 }
 
 // --- distribution discovery ----------------------------------------------
@@ -486,6 +489,15 @@ export function apply(ctx: Context, config: Config): void {
       void materialize(ctx, presets)
         .then((outcome) => {
           for (const id of outcome.produced) catalog.ids.add(id)
+          // A typo or a broken source preset would otherwise fail silently: the
+          // wrapper only ever sees `catalog`, so a configured target that never
+          // got published just degrades every WSL session to the host default.
+          if (config.defaultPreset !== '' && !catalog.ids.has(config.defaultPreset)) {
+            console.warn(
+              `dsh-wsl: defaultPreset "${config.defaultPreset}" was not published; ` +
+                'WSL sessions will fall back to the host default',
+            )
+          }
         })
         .catch((error: unknown) => {
           console.error(`dsh-wsl: preset variants failed: ${messageOf(error)}`)

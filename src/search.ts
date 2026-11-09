@@ -127,7 +127,8 @@ function checkInclude(include: string): void {
 }
 
 /** Parse one `rg --json` line; `undefined` for record types that are not a match. */
-function matchOf(line: string): GrepMatch | undefined {  let record: { type?: string; data?: Record<string, unknown> }
+function matchOf(line: string): GrepMatch | undefined {
+  let record: { type?: string; data?: Record<string, unknown> }
   try {
     record = JSON.parse(line) as typeof record
   } catch {

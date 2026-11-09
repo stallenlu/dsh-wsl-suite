@@ -56,6 +56,35 @@ test('an unknown workspace is untouched', () => {
   assert.equal('agentPreset' in out, false)
 })
 
+// `sessionController.create` serves BOTH brand-new sessions and the reuse/claim
+// of an existing one (a `sessionId` on the wire). The wrapper decides purely
+// from the request fields — it has no access to `session.projectionValues.agentPreset`
+// on the host. These two tests pin that boundary so any future change that starts
+// inspecting session state is an explicit, tested decision rather than a silent
+// one. Known limitation: resuming a non-blank WSL session whose preset the user
+// changed can be reset to the WSL default until the host exposes that state.
+
+test('a reuse/claim request with an explicit pick is never overridden', () => {
+  const out = wslDefaultPresetRequest(
+    { workspaceId: 'wsl-ws', sessionId: 's-1', agentPreset: 'standard' },
+    TARGET,
+    isWsl,
+    workspacePath,
+    true,
+  )
+  assert.equal(out.agentPreset, 'standard', 'a resumed session that carries its preset keeps it')
+})
+
+test('a reuse/claim request relies on the caller carrying the existing preset', () => {
+  // With no `agentPreset` on the wire the wrapper cannot tell a blank reused
+  // session (which SHOULD get wsl-standard) from a non-blank one the user set to
+  // `standard` (which should keep it), so it injects the default in both cases.
+  // Resuming a session with a chosen preset must pass it explicitly (as the seat
+  // does) — guaranteed by the previous test.
+  const out = wslDefaultPresetRequest({ workspaceId: 'wsl-ws', sessionId: 's-1' }, TARGET, isWsl, workspacePath, true)
+  assert.equal(out.agentPreset, TARGET)
+})
+
 interface Captured {
   request: Record<string, unknown>
 }
@@ -100,4 +129,31 @@ test('the host controller is wrapped in place and restored on disposal', async (
 test('a host without a sessionController loads without throwing', () => {
   const ctx = new Context()
   assert.doesNotThrow(() => applyDefaultPreset(ctx, TARGET, catalog))
+})
+
+test('before the variants are published the wrapper degrades without a roster', async () => {
+  // `materialize()` publishes variants asynchronously. Until it fills the
+  // catalog, an empty catalog (and no `agentPresets` service at all) must let a
+  // WSL session open under the host's global default rather than throwing while
+  // composing a preset that does not exist yet.
+  const ctx = new Context()
+  const calls: Captured[] = []
+  const provider = {
+    async create(request: Record<string, unknown>) {
+      calls.push({ request })
+      return { ok: true }
+    },
+  }
+  ctx.provide('sessionController', provider as never)
+  ctx.provide('workspaceRegistry', {
+    get: () => ({ path: UNC }),
+  } as never)
+
+  applyDefaultPreset(ctx, TARGET, { ids: new Set<string>() })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const viaCtx = ctx.get('sessionController') as unknown as typeof provider
+  await viaCtx.create({ workspaceId: 'wsl-ws' })
+
+  assert.equal(calls.length, 1)
+  assert.equal('agentPreset' in (calls[0]?.request ?? {}), false, 'an unpublished variant must not be composed')
 })

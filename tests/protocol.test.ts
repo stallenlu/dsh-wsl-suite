@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -145,6 +145,30 @@ test('bytes round-trip through base64 and a write reports fresh metadata', async
   // A missing path is an error the caller classifies, never an empty success.
   assert.equal(missing.ok, false)
   assert.equal(missing.code, 'ENOENT')
+})
+
+test('an overwrite keeps the existing file mode', async () => {
+  // The agent publishes writes through a sibling temp file + rename. Rename
+  // swaps the inode, so the new file starts with the process umask and loses
+  // the old permission bits: editing a chmod +x script drops its execute bit,
+  // and on Windows a read-only target makes the rename itself fail with EPERM.
+  // A read-only file exposes the defect on both platforms from the same path.
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-wsl-mode-'))
+  const target = join(directory, 'script.sh').replace(/\\/g, '/')
+  writeFileSync(target, '#!/bin/sh\necho first\n')
+  chmodSync(target, 0o444)
+  const before = statSync(target).mode & 0o7777
+
+  const written = await agent.ask({ op: 'write', p: target, data: Buffer.from('#!/bin/sh\necho second\n').toString('base64') })
+  // On Windows the unfixed rename fails EPERM over a read-only target.
+  assert.equal(written.ok, true, written.message ?? 'write failed')
+  // On Linux the unfixed rename succeeds but the fresh inode is 0644, not 0444.
+  assert.equal(statSync(target).mode & 0o7777, before, 'the existing mode must survive the rename')
+  assert.equal(Buffer.from((await agent.ask({ op: 'read', p: target })).data ?? '', 'base64').toString(), '#!/bin/sh\necho second\n')
+  // A second overwrite must also work: the first rename must not leave a
+  // read-only target that the next write cannot replace.
+  const second = await agent.ask({ op: 'write', p: target, data: Buffer.from('again\n').toString('base64') })
+  assert.equal(second.ok, true, second.message ?? 'second write failed')
 })
 
 test('a version token changes when any identity field changes', () => {

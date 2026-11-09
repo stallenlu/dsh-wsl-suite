@@ -439,48 +439,46 @@ export class WslFileSystem extends FileSystem {
     expected?: FsWriteIntent,
     signal?: AbortSignal,
   ): Promise<FsWriteOutcome> {
-    {
-      const address = this.address(target)
-      const channel = await channelFor(address.distro, this.config.nodePath)
-      const current = await this.stat(target, signal)
+    const address = this.address(target)
+    const channel = await channelFor(address.distro, this.config.nodePath)
+    const current = await this.stat(target, signal)
 
-      let before: string | null = null
-      if (expected?.kind === 'createIfAbsent' && current) {
-        throw new FsError(`${target.displayPath}: already exists`, 'FS_NOT_OBSERVED')
+    let before: string | null = null
+    if (expected?.kind === 'createIfAbsent' && current) {
+      throw new FsError(`${target.displayPath}: already exists`, 'FS_NOT_OBSERVED')
+    }
+    if (expected?.kind === 'replaceIfVersion') {
+      if (!current) throw new FsError(`${target.displayPath}: no such file`, 'FS_STALE_VERSION')
+      if (current.version !== expected.version) {
+        throw new FsError(`${target.displayPath}: changed since it was read`, 'FS_STALE_VERSION')
       }
-      if (expected?.kind === 'replaceIfVersion') {
-        if (!current) throw new FsError(`${target.displayPath}: no such file`, 'FS_STALE_VERSION')
-        if (current.version !== expected.version) {
-          throw new FsError(`${target.displayPath}: changed since it was read`, 'FS_STALE_VERSION')
-        }
-      }
-      if (current?.type === 'file') {
-        // The diff basis the caller needs. A binary or oversized prior file
-        // leaves `before` null, which is exactly what the seam documents.
-        before = await this.readText(target, signal).catch(() => null)
-        if (before !== null) before = toLf(before)
-      }
+    }
+    if (current?.type === 'file') {
+      // The diff basis the caller needs. A binary or oversized prior file
+      // leaves `before` null, which is exactly what the seam documents.
+      before = await this.readText(target, signal).catch(() => null)
+      if (before !== null) before = toLf(before)
+    }
 
-      // WRITE WHAT THE CALLER GAVE US. The seam's LF normalization is about the
-      // `before`/`after` REPORT (the diff basis), never the bytes on disk: a
-      // repository may legitimately hold CRLF files (`gitattributes eol=crlf`,
-      // Windows-authored scripts), and silently rewriting one whole file to LF
-      // because a caller wrote a single line through `editText` is data loss
-      // dressed up as normalization.
-      try {
-        const reply = await channel.ok(
-          { op: 'write', p: address.path, data: Buffer.from(content, 'utf8').toString('base64') },
-          signal,
-        )
-        return {
-          operation: current ? 'update' : 'create',
-          version: FsVersion(versionOf(reply.st!)),
-          before,
-          after: toLf(content),
-        }
-      } catch (error) {
-        throw asFsError(error, target.displayPath)
+    // WRITE WHAT THE CALLER GAVE US. The seam's LF normalization is about the
+    // `before`/`after` REPORT (the diff basis), never the bytes on disk: a
+    // repository may legitimately hold CRLF files (`gitattributes eol=crlf`,
+    // Windows-authored scripts), and silently rewriting one whole file to LF
+    // because a caller wrote a single line through `editText` is data loss
+    // dressed up as normalization.
+    try {
+      const reply = await channel.ok(
+        { op: 'write', p: address.path, data: Buffer.from(content, 'utf8').toString('base64') },
+        signal,
+      )
+      return {
+        operation: current ? 'update' : 'create',
+        version: FsVersion(versionOf(reply.st!)),
+        before,
+        after: toLf(content),
       }
+    } catch (error) {
+      throw asFsError(error, target.displayPath)
     }
   }
 
