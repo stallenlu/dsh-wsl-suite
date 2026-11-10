@@ -32,6 +32,13 @@ export interface HostEntryOptions {
   label: () => string
   /** Open the dialog. Called from a host-owned click listener. */
   open: () => void
+  /** The keycap to paint in the tooltip, read lazily for the same reason. */
+  hint?: () => { keys?: readonly string[]; aria?: string }
+  /**
+   * Subscribe to anything the tooltip depends on besides the label — the
+   * shortcut catalog, so a rebind repaints the keycap. Returns its disposer.
+   */
+  watch?: (onChange: () => void) => () => void
 }
 
 /**
@@ -65,7 +72,7 @@ export function mountHeaderEntry(home: HTMLElement | null, options: HostEntryOpt
   // attach the hover/focus listeners and a ref, so the button cannot be built by
   // hand and then wrapped by the bubble.
   let root: Root | null = null
-  let drawn: { className: string; label: string } | null = null
+  let drawn: { className: string; label: string; keys: string; aria: string } | null = null
   /** The dialog opener, stable across renders, so a redraw with the same facts is a no-op commit. */
   const open = (): void => options.open()
   /**
@@ -74,10 +81,21 @@ export function mountHeaderEntry(home: HTMLElement | null, options: HostEntryOpt
    * @param label - the localized entry label, which doubles as the tooltip text.
    */
   const draw = (className: string, label: string): void => {
-    if (drawn !== null && drawn.className === className && drawn.label === label) return
-    drawn = { className, label }
+    // The keycap is part of the drawn state: rebinding the command must
+    // repaint the bubble, and the cache key is what makes that happen.
+    const hint = options.hint?.() ?? {}
+    const keys = (hint.keys ?? []).join(' ')
+    const aria = hint.aria ?? ''
+    if (drawn !== null && drawn.className === className && drawn.label === label && drawn.keys === keys && drawn.aria === aria) return
+    drawn = { className, label, keys, aria }
     if (root === null) root = createRoot(slot)
-    root.render(createElement(HostEntryButton, { className, label, open }))
+    root.render(createElement(HostEntryButton, {
+      className,
+      label,
+      open,
+      ...(hint.keys === undefined ? {} : { shortcutKeys: hint.keys }),
+      ...(hint.aria === undefined ? {} : { ariaKeyshortcuts: hint.aria }),
+    }))
   }
 
   /**
@@ -150,7 +168,11 @@ export function mountHeaderEntry(home: HTMLElement | null, options: HostEntryOpt
   }
   const bodyObserver = new Observer(schedule)
   bodyObserver.observe(document.body, { childList: true, subtree: true })
+  // The label rarely changes, but the keycap does whenever the user rebinds the
+  // command, and no DOM mutation announces that.
+  const unwatch = options.watch?.(schedule) ?? (() => {})
   return () => {
+    unwatch()
     bodyObserver.disconnect()
     if (observer !== null) observer.disconnect()
     // The header is host markup; the root this plugin opened inside it must go too.

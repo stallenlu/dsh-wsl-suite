@@ -29,10 +29,35 @@ interface ClientModule {
   inject: string[]
 }
 
+/** The command the bundle registered, as the stub registry received it. */
+interface RegisteredShortcut {
+  id: string
+  label: () => string
+  aliases: readonly string[]
+  defaults: Record<string, { code: string; modifiers: readonly string[] }>
+  regions: readonly string[]
+  modals: readonly string[]
+  resolve: (context: unknown) => { status: string; run?: () => void }
+}
+
+/** The keycap row the stub catalog reports for this command. */
+const CATALOG: { id: string; keys: string[]; aria: string }[] = [
+  { id: 'workspace.wsl-add', keys: ['Ctrl', '+', 'Shift', '+', 'W'], aria: 'Control+Shift+W' },
+]
+
 /** Load `lib/client.js` under a stub `window.__ModuleLoader__`. */
-function loadBundle(): { module: ClientModule; registered: Registered[]; effects: string[]; bundleId: string } {
+function loadBundle(): {
+  module: ClientModule
+  registered: Registered[]
+  shortcuts: RegisteredShortcut[]
+  tooltips: Record<string, unknown>[]
+  effects: string[]
+  bundleId: string
+} {
   assert.ok(existsSync(bundlePath), 'lib/client.js is missing — run `npm run build`')
   const registered: Registered[] = []
+  const shortcuts: RegisteredShortcut[] = []
+  const tooltips: Record<string, unknown>[] = []
   const effects: string[] = []
   const slots = {
     // `slots.inject(name, body)` runs `body` inside the injected scope and
@@ -47,8 +72,18 @@ function loadBundle(): { module: ClientModule; registered: Registered[]; effects
       return () => {}
     },
   }
+  const shortcutService = {
+    register(command: RegisteredShortcut) {
+      shortcuts.push(command)
+      return () => {}
+    },
+    catalog: {
+      getSnapshot: () => CATALOG,
+      subscribe: () => () => {},
+    },
+  }
   const ctx = {
-    get: (name: string) => (name === 'slots' ? slots : undefined),
+    get: (name: string) => (name === 'slots' ? slots : name === 'shortcuts' ? shortcutService : undefined),
     effect: (body: () => unknown, label?: string) => {
       effects.push(label ?? '')
       body()
@@ -65,7 +100,7 @@ function loadBundle(): { module: ClientModule; registered: Registered[]; effects
         // need — the real bubble is the shell's, rendered live.
         const req = (id: string) =>
           id === '@deepseek-ai/dsh-client-ui-primitives'
-            ? { Tooltip: (props: { children: unknown }) => props.children }
+            ? { Tooltip: (props: Record<string, unknown>) => { tooltips.push(props); return props['children'] } }
             : require(id)
         module = entry.factory(req)
       },
@@ -82,7 +117,7 @@ function loadBundle(): { module: ClientModule; registered: Registered[]; effects
   new Function('window', readFileSync(bundlePath, 'utf8'))(window)
   assert.ok(module, 'the bundle never called window.__ModuleLoader__.load')
   module.apply(ctx)
-  return { module, registered, effects, bundleId }
+  return { module, registered, shortcuts, tooltips, effects, bundleId }
 }
 
 test('the bundle exports the registry shape and registers the footer fallback seat', () => {
@@ -90,14 +125,36 @@ test('the bundle exports the registry shape and registers the footer fallback se
   // The client registry identifies a module through the package's `dsh.client`
   // manifest, so `apply`/`inject` is all it may export.
   assert.deepEqual(Object.keys(module).sort(), ['apply', 'inject'])
-  assert.deepEqual(module.inject, ['slots'])
+  // `shortcuts` is declared so the shell activates it before this bundle; the
+  // keybinding degrades away when the service is missing.
+  assert.deepEqual(module.inject, ['shortcuts', 'slots'])
   assert.equal(registered.length, 1)
   assert.equal(registered[0]!.name, 'sidebar.footer.action')
   // A fresh id adds beside the shipped entries; reusing one would replace it.
   // It must match the bundle id in the tsdown banner, which must match the
   // package name the boot graph is keyed by.
   assert.equal(registered[0]!.id, 'dsh-wsl-suite')
-  assert.equal(effects.length, 1)
+  assert.equal(effects.length, 2)
+})
+
+test('the keybinding is registered as a rebindable shell command', () => {
+  const { shortcuts } = loadBundle()
+  assert.equal(shortcuts.length, 1)
+  const command = shortcuts[0]!
+  // The id is the shell's storage key; changing it orphans every user binding.
+  assert.equal(command.id, 'workspace.wsl-add')
+  assert.equal(command.label(), strings().addTitle)
+  // One binding for all five profiles, and `web:linux` left out on purpose:
+  // the shell's browser allowlist rejects two-modifier bindings there.
+  assert.deepEqual(Object.keys(command.defaults).sort(), ['desktop:linux', 'desktop:macos', 'desktop:windows', 'web:macos', 'web:windows'])
+  for (const binding of Object.values(command.defaults)) {
+    assert.deepEqual(binding, { code: 'KeyW', modifiers: ['primary', 'shift'] })
+  }
+  // `editable` so the composer can keep focus, matching the shell's own
+  // add-workspace command; `terminal` stays out — the shell leaves Ctrl+W/R to
+  // the terminal, and so does this.
+  assert.deepEqual(command.regions, ['page', 'editable'])
+  assert.deepEqual(command.modals, [])
 })
 
 test('the bundle id is the package name, as the host boot graph requires', () => {
@@ -132,7 +189,7 @@ test('the footer action is a token-styled icon button in both sidebar widths', (
 })
 
 test('the mounted action mirrors a W entry beside the workspace header add control', async () => {
-  const { registered } = loadBundle()
+  const { registered, tooltips, shortcuts } = loadBundle()
   const Action = registered[0]!.component as never as (props: Record<string, unknown>) => unknown
   const { createElement } = require('react') as typeof import('react')
   const { createRoot } = require('react-dom/client') as typeof import('react-dom/client')
@@ -170,7 +227,12 @@ test('the mounted action mirrors a W entry beside the workspace header add contr
   // is idempotent (the slot registration returns its own disposer), and the
   // loadBundle() earlier in this test ran with no document at all.
   loadBundle().module!.apply({
-    get: (name: string) => (name === 'slots' ? { inject: (_n: string, body: () => unknown) => { body(); return () => {} }, register: () => () => {} } : undefined),
+    get: (name: string) =>
+      name === 'slots'
+        ? { inject: (_n: string, body: () => unknown) => { body(); return () => {} }, register: () => () => {} }
+        : name === 'shortcuts'
+          ? { register: () => () => {}, catalog: { getSnapshot: () => CATALOG, subscribe: () => () => {} } }
+          : undefined,
     effect: (body: () => unknown) => { body() },
   })
 
@@ -194,19 +256,50 @@ test('the mounted action mirrors a W entry beside the workspace header add contr
     assert.ok(entry.className.includes('GAkraW_iconButton'), 'the shipped class list is copied')
     assert.ok(entry.className.includes('dww-header-entry'), 'the marker class is applied')
     assert.equal(entry.textContent, 'W')
+    // The keycap the shell resolved for this command rides on the button, so
+    // assistive tech and the bubble both read the live binding.
+    assert.equal(entry.getAttribute('aria-keyshortcuts'), 'Control+Shift+W')
+    // The bubble takes the keycap the same way the shell's own does: the
+    // catalog's `keys` array, not a string this plugin formatted itself.
+    const bubble = tooltips.at(-1)
+    assert.ok(bubble, 'the entry renders through the shell Tooltip')
+    assert.deepEqual(bubble!['shortcutKeys'], ['Ctrl', '+', 'Shift', '+', 'W'])
     // The strip cap must be widened, or the third button is clipped.
     const style = window.document.querySelector('style[data-plugin="dsh-wsl-suite"]')
     assert.ok(style, 'the plugin stylesheet is injected')
     assert.match(style!.textContent ?? '', /max-width:\s*92px/)
+    // The house baseline is a second, separate stylesheet: it defines the
+    // --dsb-* variables the plugin rules read, so it must be present before
+    // any dialog mounts, and it must be keyed by the plugin id so two copies
+    // of this module cannot inject it twice.
+    const baseline = window.document.querySelector('style[data-dsb="dsh-wsl-suite"]')
+    assert.ok(baseline, 'the design baseline is injected')
+    assert.match(baseline!.textContent ?? '', /--dsb-accent-stability:/)
     // The footer copy retires while the header seat is present.
     const footer = container.querySelector('button.dww-action') as HTMLButtonElement
     assert.equal(footer.hidden, true)
+
+    // The registered command is what a keypress runs: it must open the dialog
+    // of the mounted seat, not a copy of it.
+    const command = shortcuts[0]!
+    await act(async () => {
+      const resolution = command.resolve({})
+      assert.equal(resolution.status, 'handled')
+      resolution.run?.()
+    })
+    assert.ok(container.querySelector('.dww-overlay'), 'the keybinding opens the dialog')
 
     // Clicking the entry opens the dialog through the same opener.
     entry.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await act(async () => {})
     assert.match(container.textContent ?? '', new RegExp(strings().addTitle))
     assert.ok(container.querySelector('.dww-overlay'), 'the dialog overlay is mounted')
+
+    // The overlay carries `dsb-root`: the baseline maps its neutrals on that
+    // element rather than on :root, because the host declares its dark theme on
+    // `body[data-ds-dark-theme]` and a :root mapping would never see it.
+    const overlay = container.querySelector('.dww-overlay')!
+    assert.ok(overlay.classList.contains('dsb-root'), 'the dialog root is a baseline root')
 
     // The dialog asks the route for distros on mount (network is not stubbed:
     // the call fails and the error strip renders — behavior, not data, checked).

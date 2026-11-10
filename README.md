@@ -10,7 +10,7 @@ reached over a JSON-lines pipe, instead of a 9P file share plus a spawn per comm
 
 | | |
 | --- | --- |
-| Version | 0.1.6 |
+| Version | 0.1.7 |
 | Harness | DeepSeek Harness `0.2.1-rc.5` (desktop & web) |
 | Node | `>= 22` |
 | Distro | any WSL2 distro (tested on Ubuntu 26.04) |
@@ -97,7 +97,8 @@ Three consequences follow, and all three are the point of the rebuild:
 | `src/fs.ts` | `WslFileSystem extends FileSystem` — 12 primitives, version-guarded writes, `FS_STALE_VERSION`/`FS_AMBIGUOUS_EDIT`/`FS_NOT_TEXT` handling, sandbox fencing, atomic write by rename, and **byte-faithful CRLF**: the seam's LF normalization applies to the reported `before`/`after` only, never to the bytes on disk. |
 | `src/search.ts` | the `grep` and `glob` tools, running ripgrep **inside** the distribution. |
 | `src/terminal.ts` | makes the sidebar terminal follow a WSL session in: wraps the host's single `subprocess.spawnTerminal` so a UNC cwd launches `wsl.exe -d <distro> --cd <linux> -- <shell>`. |
-| `src/client/index.tsx` | browser half: the **W** header entry (via `src/client/hostEntry.ts`) with the bottom-list entry as fallback + discovery anchor; the add-workspace dialog (`src/client/styles.ts` styles it with `--dsw-*` tokens only, `src/client/locale.ts` carries the zh/en strings). |
+| `src/client/index.tsx` | browser half: the **W** header entry (via `src/client/hostEntry.ts`) with the bottom-list entry as fallback + discovery anchor; the add-workspace dialog (`src/client/styles.ts` styles it, `src/client/locale.ts` carries the zh/en strings). |
+| `src/client/baseline.ts` | the house design baseline (`dsh-design-baseline` v1.1.0), vendored: six accent colours, neutral surfaces mapped from the host's `--dsw-alias-*`. A client bundle cannot `require` a file path, so it is inlined rather than imported. |
 | `src/host/variants.ts` | preset transform that rewrites an agent preset into its WSL variant. Works on **parsed rows**, never on indentation. |
 | `src/rows.ts` | the `wsl-world` group: `shell-wsl` + `fs-wsl` + `search-wsl` under `isolate: {shell: true, fs: true}`. |
 | `src/index.ts` | host entry: distro discovery, `wsl-<mode>` materialization, `DSH_WSL_DISTRO`, and one loopback-only POST route. |
@@ -119,6 +120,29 @@ The footer entry stays registered on `sidebar.footer.action` (a `list` slot,
 `replaceRisk: "none"`, fresh id `dsh-wsl-suite`) — hidden while the header seat is present,
 and the fallback when the header is absent (rail sidebar, a release that renames the
 classes). It is also the anchor the header discovery walks up from.
+
+### The keybinding
+
+The entry is also reachable from the keyboard. `apply()` registers one command with the
+shell's own shortcuts service (`workspace.wsl-add`, `Ctrl+Shift+W` / `⌘⇧W`) — that is a
+plain registration, not a custom listener, so the shell stores the binding, lists it under
+**Settings → General → Shortcuts**, and lets the user rebind it like any built-in command.
+The `web:linux` profile is deliberately omitted: the browser allowlist rejects a
+two-modifier binding there, and a profile left out is simply unbound instead of a
+registration failure. The tooltip reads the shell's resolved keycap
+(`ctx.shortcuts.catalog`) and repaints when the user rebinds, and the button carries the
+same value in `aria-keyshortcuts`.
+
+### Colours
+
+The dialog follows the house design baseline (`dsh-design-baseline`, vendored as
+`src/client/baseline.ts`): every neutral surface comes from the host's own `--dsw-alias-*`
+tokens, and colour comes from exactly six accents — green for a completed add, rose for a
+failure, blue for focus, nothing else. Primary buttons are inverted rather than coloured,
+because colour is reserved for state. The baseline maps its neutrals on `.dsb-root`, not
+`:root`, so the dark theme's overrides actually reach them; the overlay carries that class.
+The shell chrome (the footer button and the header entry) stays on `--dsw-*` directly so it
+keeps looking like the host's own icon buttons.
 
 ## The terminal
 
@@ -196,7 +220,7 @@ push — no `file:`-style remove/reinstall dance.
 `dsh-wsl-suite.tgz` (no build step, so it skips the `allowBuilds` approval):
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.6/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.7/dsh-wsl-suite.tgz
 ```
 
 The asset name carries no version number and the URL is pinned to a tag, so the
@@ -223,7 +247,7 @@ C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 Because the installed copy is a copy, every source change needs a reinstall; from a
 DeepSeek Harness session:
 
-1. `npm run verify` in the source tree (typecheck + build + 72 checks).
+1. `npm run verify` in the source tree (typecheck + build + 73 checks).
 2. `plugin_manager remove_bundle target=dsh-wsl-suite`, then
    `plugin_manager install_bundle target=file:E:\DshConfig\dsh-wsl-suite`.
 3. Restart DSH (the reinstall answers `application: "restart-required"`).
@@ -250,7 +274,7 @@ entries proves the whole pipe.
 npm install          # devDependencies pin the 0.2.1-rc.5 host surface
 npm run typecheck    # also needs @deepseek-ai/dsh-llm (pinned in devDependencies)
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 72 checks; live ones skip when no distro is present
+npm test             # 73 checks; live ones skip when no distro is present
 npm run verify       # typecheck, then build + test
 ```
 

@@ -11,7 +11,7 @@ DeepSeek Harness 的 WSL 工作区插件。对
 
 | | |
 | --- | --- |
-| 版本 | 0.1.6 |
+| 版本 | 0.1.7 |
 | 宿主 | DeepSeek Harness `0.2.1-rc.5`（桌面版与 Web 版） |
 | Node | `>= 22` |
 | 发行版 | 任意 WSL2 发行版（在 Ubuntu 26.04 上测试） |
@@ -93,7 +93,8 @@ dsh-wsl 的问题请在本仓库提 issue；`dsh-wsl-workspace` 本身的问题�
 | `src/fs.ts` | `WslFileSystem extends FileSystem`——12 个原语、版本守卫写入、`FS_STALE_VERSION`/`FS_AMBIGUOUS_EDIT`/`FS_NOT_TEXT` 处理、沙盒围栏、rename 原子写，以及**逐字节保真的 CRLF**：接缝的 LF 归一化只作用于上报的 `before`/`after`，永不动磁盘字节。 |
 | `src/search.ts` | `grep` 和 `glob` 工具，ripgrep 在发行版**内**执行。 |
 | `src/terminal.ts` | 让侧栏终端跟着 WSL 会话进去：包装宿主唯一的 `subprocess.spawnTerminal`，UNC cwd 改写为 `wsl.exe -d <distro> --cd <linux> -- <shell>`。 |
-| `src/client/index.tsx` | 浏览器半边：**W** 标题栏入口（经 `src/client/hostEntry.ts`），底部列表入口作回退兼发现锚点；添加工作区弹窗（`src/client/styles.ts` 只用 `--dsw-*` 令牌 styling，`src/client/locale.ts` 放中英文字符串）。 |
+| `src/client/index.tsx` | 浏览器半边：**W** 标题栏入口（经 `src/client/hostEntry.ts`），底部列表入口作回退兼发现锚点；添加工作区弹窗（`src/client/styles.ts` 负责样式，`src/client/locale.ts` 放中英文字符串）。 |
+| `src/client/baseline.ts` | 设计基线（`dsh-design-baseline` v1.1.0）的 vendored 副本：六个 accent 色，中性色面映射自宿主的 `--dsw-alias-*`。client bundle 无法 `require` 文件路径，所以是内联而非 import。 |
 | `src/host/variants.ts` | 预设变换：把 agent 预设改写成它的 WSL 变体。只操作**解析后的行**，不碰缩进。 |
 | `src/rows.ts` | `wsl-world` 组：`shell-wsl` + `fs-wsl` + `search-wsl`，置于 `isolate: {shell: true, fs: true}` 下。 |
 | `src/index.ts` | 宿主入口：发行版发现、`wsl-<mode>` 物化、`DSH_WSL_DISTRO`、一条仅回环的 POST 路由。 |
@@ -114,6 +115,24 @@ shipped-hidden 变体则保持收起。
 底部入口仍注册在 `sidebar.footer.action`（`list` 型 slot、
 `replaceRisk: "none"`、新 id `dsh-wsl-suite`）——标题栏席位在场时隐藏，标题栏
 缺席时作回退（rail 侧栏、发版改了类名）。它也是标题栏发现向上走的锚点。
+
+### 快捷键
+
+这个入口也能用键盘打开。`apply()` 向宿主自己的快捷键服务注册一条命令
+（`workspace.wsl-add`，`Ctrl+Shift+W` / `⌘⇧W`）——这是普通注册，不是自建的按键
+监听，所以绑定由宿主保存、出现在**设置 → 通用 → 快捷键**里，用户可以像内置命令
+一样重新绑定。`web:linux` 一项故意不声明：浏览器白名单在该平台不接受双修饰键
+绑定，而缺省的 profile 只是未绑定，不会导致整条注册失败。tooltip 里的键帽取自
+宿主解析后的结果（`ctx.shortcuts.catalog`），用户改键后会重绘，按钮上也带着同一
+个值的 `aria-keyshortcuts`。
+
+### 配色
+
+弹窗遵循设计基线（`dsh-design-baseline`，以 `src/client/baseline.ts` vendored 进包里）：
+所有中性色面取自宿主自己的 `--dsw-alias-*` 令牌，颜色只来自六个 accent——绿表添加成功、
+玫红表失败、蓝表聚焦，别无其他。主按钮用反色而不是彩色，因为颜色留给状态。基线把中性色
+映射在 `.dsb-root` 而不是 `:root` 上，深色主题的覆盖才能真正生效，所以遮罩层带着这个类。
+外壳部分（底部按钮与标题栏入口）仍直接用 `--dsw-*`，保持和宿主自己的图标按钮同一个样子。
 
 ## 终端
 
@@ -184,7 +203,7 @@ remove/reinstall 流程。
 `dsh-wsl-suite.tgz`（无需构建，因此跳过 `allowBuilds` 授权）：
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.6/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.7/dsh-wsl-suite.tgz
 ```
 
 资产名不含版本号、URL 钉死在 tag 上，后续发版不会让链接失效。
@@ -207,7 +226,7 @@ C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 
 因为安装副本是复制，每处源码改动都要重装；在 DeepSeek Harness 会话里：
 
-1. 源码树里 `npm run verify`（类型检查 + 构建 + 72 项检查）。
+1. 源码树里 `npm run verify`（类型检查 + 构建 + 73 项检查）。
 2. `plugin_manager remove_bundle target=dsh-wsl-suite`，然后
    `plugin_manager install_bundle target=file:E:\DshConfig\dsh-wsl-suite`。
 3. 重启 DSH（重装返回 `application: "restart-required"`）。
@@ -234,7 +253,7 @@ curl -X POST http://127.0.0.1:<gui-port>/dsh-wsl/api \\
 npm install          # devDependencies 钉住 0.2.1-rc.5 宿主接口
 npm run typecheck    # 还需 @deepseek-ai/dsh-llm（已钉在 devDependencies）
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 72 项检查；live 的在没有发行版时跳过而非失败
+npm test             # 73 项检查；live 的在没有发行版时跳过而非失败
 npm run verify       # 类型检查，然后 build + test
 ```
 

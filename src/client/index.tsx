@@ -15,14 +15,16 @@
  * listing — and otherwise uses the host's own `remote.workspace.create`, so no
  * second workspace registry exists.
  *
- * Styling is token-only (`src/client/styles.ts`, all `--dsw-*`), so the same
- * rules read correctly on the dark shell instead of the light-theme fallbacks
- * this client used to hard-code.
+ * Styling follows the house design baseline (`src/client/baseline.ts`, the
+ * `dsh-design-baseline` tokens): neutral surfaces come from the host, colour
+ * only from the six accents. Shell chrome stays on `--dsw-*` so the button
+ * still looks like the host's own controls.
  *
  * @module dsh-wsl/client
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { injectBaseline } from './baseline.ts'
 import { mountHeaderEntry } from './hostEntry.ts'
 import { ensureStyles } from './styles.ts'
 import { fill, strings } from './locale.ts'
@@ -31,12 +33,75 @@ import { fill, strings } from './locale.ts'
 // manifest, so the bundle exports `apply`/`inject` only — the shape the
 // installed reference plugin ships and the registry accepts.
 
-/** `slots` is the only hard dependency; the dialog degrades without the rest. */
-export const inject = ['slots']
+/**
+ * `slots` is the hard dependency; `shortcuts` is optional and only adds the
+ * keybinding — the entry keeps working (without a keycap) when it is absent.
+ */
+export const inject = ['shortcuts', 'slots']
 
 /** The route the host half registers by default. */
 const ENDPOINT = '/dsh-wsl/api'
 const CALL_TIMEOUT_MS = 30_000
+
+// --- shortcut ------------------------------------------------------------
+
+/** The command id the shell stores the user's keybinding under. */
+const SHORTCUT_ID = 'workspace.wsl-add'
+
+// The default the shell ships: Ctrl+Shift+W on Windows/Linux, ⌘⇧W on macOS.
+// `primary` is the shell's semantic name for that modifier, so one declaration
+// covers both. `web:linux` is deliberately absent: the shell's web allowlist
+// rejects two-modifier bindings on Linux, and a profile left out is simply
+// unbound instead of a registration failure.
+const BINDING = { code: 'KeyW', modifiers: ['primary', 'shift'] } as const
+
+/** One row of the shell's shortcut catalog, as much of it as the keycap needs. */
+interface ShortcutRow {
+  id: string
+  keys?: readonly string[]
+  aria?: string
+}
+
+interface ShortcutCatalog {
+  getSnapshot(): readonly ShortcutRow[]
+  subscribe(listener: () => void): () => void
+}
+
+interface ShortcutCommand {
+  id: string
+  label: () => string
+  aliases: readonly string[]
+  defaults: Record<string, { code: string; modifiers: readonly string[] }>
+  regions: readonly string[]
+  modals: readonly string[]
+  resolve(context: unknown): { status: 'handled'; run: () => void } | { status: 'pass' }
+}
+
+interface ShortcutsService {
+  register(command: ShortcutCommand): () => void
+  catalog?: ShortcutCatalog
+}
+
+/**
+ * The shell mounts the footer seat itself, so the dialog's opener has to be
+ * reachable from outside that component for the keybinding to call it. Every
+ * mounted seat publishes one; the command calls all of them.
+ */
+const openers = new Set<() => void>()
+
+function openDialog(): void {
+  for (const open of openers) open()
+}
+
+/** Set by `apply`; read by the mounted seat to paint the tooltip keycap. */
+let shortcutCatalog: ShortcutCatalog | undefined
+
+/** The catalog row for this command, or undefined before the shell knows it. */
+function shortcutHint(): { keys?: readonly string[]; aria?: string } {
+  const row = shortcutCatalog?.getSnapshot().find(candidate => candidate.id === SHORTCUT_ID)
+  if (row === undefined) return {}
+  return { ...(row.keys === undefined ? {} : { keys: row.keys }), ...(row.aria === undefined ? {} : { aria: row.aria }) }
+}
 
 // --- transport -----------------------------------------------------------
 
@@ -169,7 +234,7 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
   }
 
   return (
-    <div className="dww-overlay" role="dialog" aria-modal="true" aria-label={t.addTitle}>
+    <div className="dww-overlay dsb-root" role="dialog" aria-modal="true" aria-label={t.addTitle}>
       <div className="dww-overlay-mask" onClick={props.onClose} />
       <div className="dww-card">
         <div className="dww-header">
@@ -264,8 +329,20 @@ function AddWslAction(props: { wide: boolean }): React.ReactElement {
   const homeRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
+    const show = (): void => setOpen(true)
+    openers.add(show)
+    return () => { openers.delete(show) }
+  }, [])
+
+  useEffect(() => {
     const home = homeRef.current?.parentElement ?? null
-    return mountHeaderEntry(home, { label: () => t.addTitle, open: () => setOpen(true) }, setSeated)
+    return mountHeaderEntry(home, {
+      label: () => t.addTitle,
+      open: () => setOpen(true),
+      hint: shortcutHint,
+      // A rebind rewrites the catalog row, not the DOM; redraw on its signal.
+      watch: onChange => shortcutCatalog?.subscribe(onChange) ?? (() => {}),
+    }, setSeated)
     // The dictionary is resolved once per mount; a language change reloads the shell.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -295,11 +372,57 @@ interface SlotsService {
   inject(name: string, register: () => () => void): () => void
 }
 
+/**
+ * Register the keybinding. The shell owns the storage, the settings page and
+ * the conflict checks, so this is all it takes for the user to be able to
+ * rebind it under Settings → General → Shortcuts.
+ * @param ctx - the plugin context, whose `shortcuts` service may be absent.
+ */
+function registerShortcut(ctx: { get(name: string): unknown; effect(body: () => () => void, label?: string): void }): void {
+  const shortcuts = ctx.get('shortcuts') as unknown as ShortcutsService | undefined
+  if (shortcuts === undefined || typeof shortcuts.register !== 'function') return
+  shortcutCatalog = shortcuts.catalog
+  const t = strings()
+  ctx.effect(
+    () =>
+      shortcuts.register({
+        id: SHORTCUT_ID,
+        label: () => strings().addTitle,
+        aliases: [t.addTitle, 'add wsl workspace', 'wsl workspace'],
+        defaults: {
+          'desktop:macos': BINDING,
+          'desktop:windows': BINDING,
+          'desktop:linux': BINDING,
+          'web:macos': BINDING,
+          'web:windows': BINDING,
+        },
+        // `editable` matches the shell's own add-workspace command: the
+        // composer holds focus most of the time, and the shell resolves its
+        // bindings ahead of editor handling. The terminal region is left out on
+        // purpose — Ctrl+Shift+W there belongs to whatever runs inside it.
+        regions: ['page', 'editable'],
+        modals: [],
+        resolve: () => ({ status: 'handled', run: openDialog }),
+      }),
+    'dsh-wsl: add WSL workspace shortcut',
+  )
+}
+
 export function apply(ctx: { get(name: string): unknown; effect(body: () => () => void, label?: string): void }): void {
   // Named exports only: the client registry reads the module's named exports,
   // and a default export would make a CommonJS consumer reach for `.default`.
 
   ensureStyles()
+  // The baseline stylesheet defines the --dsb-* variables every rule in
+  // styles.ts reads. Injected here (not per-mount) so it exists before the
+  // first dialog opens; the injection is idempotent by style attribute, and
+  // tolerates a document-less run (the node test harness loads this bundle
+  // without a DOM for the pure-registration assertions).
+  injectBaseline(typeof document === 'undefined' ? undefined : document, 'dsh-wsl-suite')
+
+  // Before the seats: a shortcut pressed before the footer mounts still opens
+  // the dialog, because the command calls whatever openers exist at that time.
+  registerShortcut(ctx)
 
   const slots = ctx.get('slots') as unknown as SlotsService | undefined
   if (slots === undefined || typeof slots.register !== 'function') return

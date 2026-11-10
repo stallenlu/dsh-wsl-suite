@@ -19,21 +19,26 @@ export interface HostEntryButtonProps {
   label: string
   /** Open the "Add WSL workspace" dialog. */
   open: () => void
+  /** Keycap labels from the shell's catalog — the same array its own tooltips take. */
+  shortcutKeys?: readonly string[]
+  /** The `aria-keyshortcuts` value for the same binding. */
+  ariaKeyshortcuts?: string
 }
 
 /**
  * One icon button in the Workspaces header, carrying the shell's tooltip.
- * @param props - class list, label and opener.
+ * @param props - class list, label, opener, and the keybinding the shell resolved.
  * @returns the wrapped button.
  */
-export function HostEntryButton({ className, label, open }: HostEntryButtonProps): ReactElement {
+export function HostEntryButton({ className, label, open, shortcutKeys, ariaKeyshortcuts }: HostEntryButtonProps): ReactElement {
   return (
-    <Tooltip label={label} side="bottom" delayMs={500}>
+    <Tooltip label={label} side="bottom" delayMs={500} {...(shortcutKeys === undefined ? {} : { shortcutKeys })}>
       <button
         type="button"
         className={`${className} dww-header-entry`}
         aria-haspopup="dialog"
         aria-label={label}
+        {...(ariaKeyshortcuts === undefined ? {} : { 'aria-keyshortcuts': ariaKeyshortcuts })}
         onClick={open}
       >
         <span className="dww-letter" aria-hidden="true">W</span>

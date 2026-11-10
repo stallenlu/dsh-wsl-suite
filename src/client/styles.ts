@@ -1,8 +1,17 @@
 /**
  * Third-party stylesheet injection for the WSL workspace UI (the plugin
  * builds no CSS bundle, so styles are injected as one idempotent `<style>`).
- * Colors derive exclusively from the `--dsw-*` design tokens — no hard-coded
- * light-theme fallbacks, so the same rules read correctly on the dark shell.
+ *
+ * Colour comes from the house design baseline (dsh-design-baseline, vendored
+ * in `src/client/baseline.ts`): the six `--dsb-accent-*` for anything
+ * meaningful (error, success, focus) and `--dsb-*` neutrals, which map back to
+ * the host's `--dsw-alias-*` tokens. The plugin keeps its own `.dww-*` class
+ * names — the baseline is a palette and a set of component classes, not a
+ * naming scheme — and the dialog root carries `dsb-root` so the baseline
+ * variables resolve on an element the host's dark-theme selector can reach.
+ *
+ * Shell chrome (the footer button, the header entry) stays on `--dsw-*`
+ * directly: it has to look like the host's own icon buttons, not like a panel.
  */
 
 const STYLE_TAG_DATA_ATTRIBUTE = 'data-plugin="dsh-wsl-suite"'
@@ -22,20 +31,20 @@ const STYLES = `
   padding: 0;
   background: transparent;
   cursor: pointer;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-secondary, #61666b);
   transition:
-    background-color 120ms var(--dsw-ease-in-out, ease-in-out),
-    color 120ms var(--dsw-ease-in-out, ease-in-out);
+    background-color 120ms ease-in-out,
+    color 120ms ease-in-out;
 }
 .dww-action:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-interactive-bg-hover, #2631480f);
+  color: var(--dsw-alias-label-secondary, #61666b);
 }
 .dww-action:active:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-pressed, var(--dsw-alias-interactive-bg-hover));
+  background: var(--dsw-alias-interactive-bg-hover, #2631480f);
 }
 .dww-action:focus-visible {
-  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline: 2px solid var(--dsw-alias-state-business-primary, #3b82f6);
   outline-offset: 1px;
 }
 .dww-action:disabled { cursor: default; opacity: 0.6; }
@@ -58,7 +67,7 @@ const STYLES = `
 }
 /* The base rule is the dimmed rail tone. */
 .dww-action--rail,
-.dww-action--wide { color: var(--dsw-alias-label-primary); }
+.dww-action--wide { color: var(--dsw-alias-label-primary, #0f1115); }
 .dww-action svg { flex: none; }
 
 /* The W letter mark of the sidebar action (sized for wide/rail buttons). */
@@ -78,7 +87,9 @@ const STYLES = `
   text-align: center;
 }
 
-/* Full-viewport overlay + centered card (mirrors the platform Mask/Dialog). */
+/* Full-viewport overlay + centered card (mirrors the platform Mask/Dialog).
+   The overlay carries dsb-root: the baseline resolves its neutrals on that
+   element, which is also what keeps the dark theme honest. */
 .dww-overlay {
   position: fixed;
   inset: 0;
@@ -91,8 +102,8 @@ const STYLES = `
 .dww-overlay-mask {
   position: absolute;
   inset: 0;
-  background: var(--dsw-alias-bg-mask-1);
-  backdrop-filter: var(--dsw-mask-blur);
+  background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.45));
+  backdrop-filter: var(--dsw-mask-blur, blur(8px));
 }
 .dww-card {
   position: relative;
@@ -102,27 +113,29 @@ const STYLES = `
   flex-direction: column;
   width: min(440px, 100%);
   max-height: min(640px, 90vh);
-  padding: 0 0 20px;
+  padding: 0 0 18px;
   overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-inverted);
-  border-radius: 16px;
-  background: var(--dsw-alias-bg-layer-2);
-  box-shadow: var(--dsw-shadow-lv3);
-  font-family: var(--dsw-font-family);
+  border: 1px solid var(--dsb-line-strong);
+  border-radius: var(--dsb-radius);
+  background: var(--dsb-surface);
+  color: var(--dsb-text);
+  box-shadow: var(--dsw-shadow-lv3, 0 8px 24px rgba(0, 0, 0, 0.18));
+  font-family: var(--dsb-font);
 }
 .dww-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 18px 20px 12px;
+  padding: 16px 18px 10px;
 }
 .dww-title {
   margin: 0;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: -0.01em;
+  color: var(--dsb-text);
 }
 .dww-close {
   flex: none;
@@ -132,52 +145,54 @@ const STYLES = `
   width: 28px;
   height: 28px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--dsb-radius-sm);
   background: transparent;
   cursor: pointer;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsb-text-secondary);
 }
-.dww-close:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dww-close:hover { background: var(--dsb-hover); color: var(--dsb-text); }
 .dww-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--dsb-gap);
   min-width: 0;
-  padding: 0 20px;
+  padding: 0 18px;
   overflow: auto;
 }
 .dww-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .dww-field-label {
   font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsb-text-secondary);
 }
 .dww-select {
   box-sizing: border-box;
   width: 100%;
-  height: 36px;
+  height: 34px;
   padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-3);
-  color: var(--dsw-alias-label-primary);
-  font-size: 14px;
+  border: 1px solid var(--dsb-line-strong);
+  border-radius: var(--dsb-radius-sm);
+  background: var(--dsb-surface-3);
+  color: var(--dsb-text);
+  font-size: 13px;
 }
 .dww-input {
   box-sizing: border-box;
   flex: 1;
-  height: 36px;
+  height: 34px;
   min-width: 0;
   padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-3);
-  color: var(--dsw-alias-label-primary);
-  font-size: 14px;
+  border: 1px solid var(--dsb-line-strong);
+  border-radius: var(--dsb-radius-sm);
+  background: var(--dsb-surface-3);
+  color: var(--dsb-text);
+  font-size: 13px;
 }
+/* Focus is an accent, not a surface change: blue is the baseline's "active"
+   colour and the only saturated thing in an otherwise neutral panel. */
 .dww-input:focus, .dww-select:focus {
   outline: none;
-  border-color: var(--dsw-alias-state-business-primary);
+  border-color: var(--dsb-accent-speed);
 }
 
 /* Directory browse list. */
@@ -190,9 +205,9 @@ const STYLES = `
   max-height: 200px;
   padding: 4px;
   overflow: auto;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-3);
+  border: 1px solid var(--dsb-line);
+  border-radius: var(--dsb-radius-sm);
+  background: var(--dsb-surface-2);
 }
 .dww-feedback {
   /* The browse block: the path above the listing, as one visual group. */
@@ -205,7 +220,7 @@ const STYLES = `
   padding: 0 4px;
   font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsb-text-tertiary);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -219,30 +234,32 @@ const STYLES = `
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsb-text);
   cursor: pointer;
   font-size: 13px;
   text-align: left;
 }
-.dww-dir-row:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
-.dww-dir-row:disabled { cursor: default; color: var(--dsw-alias-label-tertiary); }
-.dww-dir-row--up { color: var(--dsw-alias-label-secondary); }
-.dww-dir-row svg { flex: none; color: var(--dsw-alias-label-tertiary); }
+.dww-dir-row:hover:not(:disabled) { background: var(--dsb-hover); }
+.dww-dir-row:disabled { cursor: default; color: var(--dsb-text-tertiary); }
+.dww-dir-row--up { color: var(--dsb-text-secondary); }
+.dww-dir-row svg { flex: none; color: var(--dsb-text-tertiary); }
 .dww-dir-empty {
   padding: 8px;
   font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsb-text-tertiary);
 }
 
-/* Error strip. */
+/* Feedback strips. Colour is meaningful here, so both take an accent and a
+   15% wash of it — the same treatment the baseline gives a chip. */
 .dww-error {
   box-sizing: border-box;
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-state-error-primary);
-  border-radius: 8px;
-  color: var(--dsw-alias-state-error-primary);
+  border: 1px solid color-mix(in srgb, var(--dsb-accent-error) 45%, transparent);
+  border-radius: var(--dsb-radius-sm);
+  background: var(--dsb-wash-error);
+  color: var(--dsb-accent-error);
   font-size: 12px;
   line-height: 18px;
 }
@@ -250,39 +267,43 @@ const STYLES = `
   box-sizing: border-box;
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-state-business-primary);
-  border-radius: 8px;
-  color: var(--dsw-alias-state-business-primary);
+  border: 1px solid color-mix(in srgb, var(--dsb-accent-stability) 45%, transparent);
+  border-radius: var(--dsb-radius-sm);
+  background: var(--dsb-wash-stability);
+  color: var(--dsb-accent-stability);
   font-size: 12px;
   line-height: 18px;
 }
 
-/* Dialog footer actions. */
+/* Dialog footer actions. Primary is inverted, not coloured: colour is
+   reserved for state, which is the one rule the baseline will not bend. */
 .dww-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 14px 20px 0;
+  padding: 14px 18px 0;
 }
 .dww-btn {
-  height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--dsb-line-strong);
+  border-radius: var(--dsb-radius-sm);
   background: transparent;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsb-text);
   cursor: pointer;
-  font-size: 14px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
 }
-.dww-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.dww-btn:hover:not(:disabled) { background: var(--dsb-hover); }
 .dww-btn--primary {
   border-color: transparent;
-  background: var(--dsw-alias-button-primary-fill);
-  color: var(--dsw-alias-label-primary-foreground);
+  background: var(--dsb-inverted-bg);
+  color: var(--dsb-inverted-fg);
 }
-.dww-btn--primary:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); }
-.dww-btn:disabled { cursor: default; opacity: 0.6; }
+.dww-btn--primary:hover:not(:disabled) { background: var(--dsb-inverted-bg); opacity: 0.9; }
+.dww-btn:disabled { cursor: default; opacity: 0.45; background: transparent; }
 
 /* The footer row stays mounted in a wide sidebar because the header entry
    discovers its seat from it; it is hidden, not removed, once that entry is
