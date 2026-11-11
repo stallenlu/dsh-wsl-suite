@@ -11,7 +11,7 @@ DeepSeek Harness 的 WSL 工作区插件。对
 
 | | |
 | --- | --- |
-| 版本 | 0.1.7 |
+| 版本 | 0.1.8 |
 | 宿主 | DeepSeek Harness `0.2.1-rc.5`（桌面版与 Web 版） |
 | Node | `>= 22` |
 | 发行版 | 任意 WSL2 发行版（在 Ubuntu 26.04 上测试） |
@@ -134,6 +134,11 @@ shipped-hidden 变体则保持收起。
 映射在 `.dsb-root` 而不是 `:root` 上，深色主题的覆盖才能真正生效，所以遮罩层带着这个类。
 外壳部分（底部按钮与标题栏入口）仍直接用 `--dsw-*`，保持和宿主自己的图标按钮同一个样子。
 
+`src/client/baseline.ts` 第一行是一条 `/*! >>> dsh-design-baseline v1.1.0 sha256 … */`
+标记注释。它不是装饰：基线的 `check-all.mjs` 用这条标记区分「带着编译好整份样式表的插件」
+（此后会拿 `dist/theme.js` 比对漂移）与「只手工抄了几个令牌的插件」。基线重新构建后要
+重新生成这个文件——标记里的哈希必须跟着动。
+
 ## 终端
 
 侧栏终端*不由* `terminals` 注册表驱动，加终端后端够不着它。
@@ -203,7 +208,7 @@ remove/reinstall 流程。
 `dsh-wsl-suite.tgz`（无需构建，因此跳过 `allowBuilds` 授权）：
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.7/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.8/dsh-wsl-suite.tgz
 ```
 
 资产名不含版本号、URL 钉死在 tag 上，后续发版不会让链接失效。

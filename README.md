@@ -10,7 +10,7 @@ reached over a JSON-lines pipe, instead of a 9P file share plus a spawn per comm
 
 | | |
 | --- | --- |
-| Version | 0.1.7 |
+| Version | 0.1.8 |
 | Harness | DeepSeek Harness `0.2.1-rc.5` (desktop & web) |
 | Node | `>= 22` |
 | Distro | any WSL2 distro (tested on Ubuntu 26.04) |
@@ -144,6 +144,12 @@ because colour is reserved for state. The baseline maps its neutrals on `.dsb-ro
 The shell chrome (the footer button and the header entry) stays on `--dsw-*` directly so it
 keeps looking like the host's own icon buttons.
 
+`src/client/baseline.ts` opens with a `/*! >>> dsh-design-baseline v1.1.0 sha256 … */`
+stamp line. It is not decoration: the baseline's `check-all.mjs` uses that stamp to tell a
+plugin that carries a compiled copy of the sheet (drift is then tracked against
+`dist/theme.js`) from one that hand-copied a few tokens. Regenerate the file whenever the
+baseline is rebuilt — the stamp's hash has to move with it.
+
 ## The terminal
 
 The sidebar terminal is *not* driven by the `terminals` registry, so adding a terminal
@@ -220,7 +226,7 @@ push — no `file:`-style remove/reinstall dance.
 `dsh-wsl-suite.tgz` (no build step, so it skips the `allowBuilds` approval):
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.7/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.8/dsh-wsl-suite.tgz
 ```
 
 The asset name carries no version number and the URL is pinned to a tag, so the

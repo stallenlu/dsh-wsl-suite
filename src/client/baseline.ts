@@ -1,3 +1,4 @@
+/*! >>> dsh-design-baseline v1.1.0 sha256 76858a2ccf04445daf6a05a19bd8903ff09a8b34789dde945e4ac0cbd47a0a7a */
 /**
  * The house design baseline (dsh-design-baseline v1.1.0), vendored so the
  * bundle carries it itself.
