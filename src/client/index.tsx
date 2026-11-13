@@ -24,10 +24,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { injectBaseline } from './baseline.ts'
 import { mountHeaderEntry } from './hostEntry.ts'
 import { ensureStyles } from './styles.ts'
-import { fill, strings } from './locale.ts'
+import { fill, strings, type Strings } from './locale.ts'
 
 // The client registry identifies this module through the package's `dsh.client`
 // manifest, so the bundle exports `apply`/`inject` only — the shape the
@@ -93,8 +94,42 @@ function openDialog(): void {
   for (const open of openers) open()
 }
 
-/** Set by `apply`; read by the mounted seat to paint the tooltip keycap. */
+/** Seats waiting for the catalog to appear or change. */
+const catalogListeners = new Set<() => void>()
+
+/** Set once the shell provides the service; read by the mounted seat. */
 let shortcutCatalog: ShortcutCatalog | undefined
+/** The live catalog subscription, replaced rather than stacked on re-adoption. */
+let catalogOff: (() => void) | undefined
+
+/**
+ * Adopt the shell's catalog. The service usually arrives after this plugin
+ * activates, so the seats may already be mounted and watching: forward every
+ * later change to them rather than subscribing their own copy each time.
+ * @param catalog - the shell's catalog, or undefined when it has none.
+ */
+function setShortcutCatalog(catalog: ShortcutCatalog | undefined): void {
+  catalogOff?.()
+  shortcutCatalog = catalog
+  catalogOff = catalog?.subscribe(() => {
+    for (const notify of catalogListeners) notify()
+  })
+  // A seat mounted before the service existed is still waiting for its first
+  // paint; tell it to look again now.
+  for (const notify of catalogListeners) notify()
+}
+
+/**
+ * Watch for catalog changes, including the arrival of the catalog itself.
+ * @param onChange - called when the row this plugin reads may have changed.
+ * @returns the unsubscribe function.
+ */
+function watchShortcutCatalog(onChange: () => void): () => void {
+  catalogListeners.add(onChange)
+  return () => {
+    catalogListeners.delete(onChange)
+  }
+}
 
 /** The catalog row for this command, or undefined before the shell knows it. */
 function shortcutHint(): { keys?: readonly string[]; aria?: string } {
@@ -142,6 +177,8 @@ async function call<T>(method: string, params: Record<string, unknown> = {}): Pr
 // --- dialog --------------------------------------------------------------
 
 const JOINT = '/'
+/** drvfs mount root: browsable from inside the distribution, not from Windows. */
+const MNT_ROOT = '/mnt'
 
 function childPath(parent: string, name: string): string {
   return parent === JOINT ? `/${name}` : `${parent}/${name}`
@@ -262,10 +299,18 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [distro])
 
+  // `/mnt` itself resolves on Windows; anything below it does not, so the host
+  // cannot canonicalise a workspace path there (see the route's own guard).
+  const drvfs = path === MNT_ROOT || path.startsWith(`${MNT_ROOT}/`)
+
   const create = useCallback(async () => {
     setBusy(true)
     setError(undefined)
     try {
+      // Say why here rather than letting the host answer `EPERM, realpath
+      // '\\wsl.localhost\...'`: the limit is Windows', not a bug in the path,
+      // and the caller can act on the explanation.
+      if (drvfs) throw new Error(t.pathDrvfs)
       const value = await call<{ workspace: { title: string }; created: boolean }>('createWorkspace', {
         distro,
         path,
@@ -280,7 +325,7 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
     } finally {
       setBusy(false)
     }
-  }, [distro, path, t])
+  }, [distro, path, t, drvfs])
 
   const crumbs: string[] = []
   for (let cursor = path; ; cursor = parentPath(cursor)) {
@@ -288,7 +333,7 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
     if (cursor === JOINT) break
   }
 
-  return (
+  const card = (
     <div className="dww-overlay dsb-root" role="dialog" aria-modal="true" aria-label={t.addTitle}>
       <div className="dww-overlay-mask" onClick={props.onClose} />
       <div className="dww-card">
@@ -392,6 +437,10 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
           {variantsMissing === 0 ? null : (
             <div className="dww-warn">{fill(t.variantsMissing, { count: String(variantsMissing) })}</div>
           )}
+          {/* Said before the click, not after it: browsing into /mnt is a
+              reasonable thing to do, and the button would only explain itself
+              once it failed. */}
+          {drvfs ? <div className="dww-warn">{t.pathDrvfs}</div> : null}
           {error === undefined ? null : <div className="dww-error">{error}</div>}
           {done === undefined ? null : <div className="dww-done">{done}</div>}
         </div>
@@ -400,13 +449,28 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
           <button type="button" className="dww-btn" onClick={props.onClose} disabled={busy}>
             {t.close}
           </button>
-          <button type="button" className="dww-btn dww-btn--primary" onClick={() => void create()} disabled={busy || distro === ''}>
+          <button
+            type="button"
+            className="dww-btn dww-btn--primary"
+            onClick={() => void create()}
+            disabled={busy || distro === '' || drvfs}
+          >
             {t.addFolder}
           </button>
         </div>
       </div>
     </div>
   )
+
+  // The seat lives inside the sidebar, which clips and stacks its own subtree
+  // (`overflow: hidden` on the region, a stacking context on the rail). A
+  // `position: fixed` overlay opened from there is painted inside that
+  // clipping ancestor, so the dialog mounted and the clicks did nothing
+  // visible. Portalling to `body` — the paint root — is the fix the shell's
+  // own dialogs use, and it also means the keybinding works with the footer
+  // seat hidden, collapsed, or unmounted.
+  if (typeof document === 'undefined') return card
+  return createPortal(card, document.body)
 }
 
 // --- seats ---------------------------------------------------------------
@@ -435,7 +499,7 @@ function AddWslAction(props: { wide: boolean }): React.ReactElement {
       open: () => setOpen(true),
       hint: shortcutHint,
       // A rebind rewrites the catalog row, not the DOM; redraw on its signal.
-      watch: onChange => shortcutCatalog?.subscribe(onChange) ?? (() => {}),
+      watch: watchShortcutCatalog,
     }, setSeated)
     // The dictionary is resolved once per mount; a language change reloads the shell.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -466,43 +530,57 @@ interface SlotsService {
   inject(name: string, register: () => () => void): () => void
 }
 
+/** The plugin context, as much of it as this half uses. */
+interface PluginContext {
+  get(name: string): unknown
+  inject(deps: string[], callback: (ctx: PluginContext) => void): void
+  effect(body: () => () => void, label?: string): void
+}
+
+/** The command object, built fresh so the label follows the locale. */
+function shortcutCommand(t: Strings): ShortcutCommand {
+  return {
+    id: SHORTCUT_ID,
+    label: () => strings().addTitle,
+    aliases: [t.addTitle, 'add wsl workspace', 'wsl workspace'],
+    defaults: {
+      'desktop:macos': BINDING,
+      'desktop:windows': BINDING,
+      'desktop:linux': BINDING,
+      'web:macos': BINDING,
+      'web:windows': BINDING,
+    },
+    // `editable` matches the shell's own add-workspace command: the composer
+    // holds focus most of the time, and the shell resolves its bindings ahead
+    // of editor handling. The terminal region is left out on purpose —
+    // Ctrl+Shift+W there belongs to whatever runs inside it.
+    regions: ['page', 'editable'],
+    modals: [],
+    resolve: () => ({ status: 'handled', run: openDialog }),
+  }
+}
+
 /**
  * Register the keybinding. The shell owns the storage, the settings page and
  * the conflict checks, so this is all it takes for the user to be able to
  * rebind it under Settings → General → Shortcuts.
- * @param ctx - the plugin context, whose `shortcuts` service may be absent.
+ * @param ctx - the plugin context.
  */
-function registerShortcut(ctx: { get(name: string): unknown; effect(body: () => () => void, label?: string): void }): void {
-  const shortcuts = ctx.get('shortcuts') as unknown as ShortcutsService | undefined
-  if (shortcuts === undefined || typeof shortcuts.register !== 'function') return
-  shortcutCatalog = shortcuts.catalog
-  const t = strings()
-  ctx.effect(
-    () =>
-      shortcuts.register({
-        id: SHORTCUT_ID,
-        label: () => strings().addTitle,
-        aliases: [t.addTitle, 'add wsl workspace', 'wsl workspace'],
-        defaults: {
-          'desktop:macos': BINDING,
-          'desktop:windows': BINDING,
-          'desktop:linux': BINDING,
-          'web:macos': BINDING,
-          'web:windows': BINDING,
-        },
-        // `editable` matches the shell's own add-workspace command: the
-        // composer holds focus most of the time, and the shell resolves its
-        // bindings ahead of editor handling. The terminal region is left out on
-        // purpose — Ctrl+Shift+W there belongs to whatever runs inside it.
-        regions: ['page', 'editable'],
-        modals: [],
-        resolve: () => ({ status: 'handled', run: openDialog }),
-      }),
-    'dsh-wsl: add WSL workspace shortcut',
-  )
+function registerShortcut(ctx: PluginContext): void {
+  // `shortcuts` is provided by a sibling plugin, so it may not exist yet when
+  // this one activates. `ctx.inject` is cordis's "wait for this service, then
+  // run" hook; asking `ctx.get` once at activation would skip the registration
+  // for the whole session — which is how the command went missing before (no
+  // keycap in the tooltip, and the keybinding never fired).
+  ctx.inject(['shortcuts'], scope => {
+    const shortcuts = scope.get('shortcuts') as unknown as ShortcutsService | undefined
+    if (shortcuts === undefined || typeof shortcuts.register !== 'function') return
+    setShortcutCatalog(shortcuts.catalog)
+    scope.effect(() => shortcuts.register(shortcutCommand(strings())), 'dsh-wsl: add WSL workspace shortcut')
+  })
 }
 
-export function apply(ctx: { get(name: string): unknown; effect(body: () => () => void, label?: string): void }): void {
+export function apply(ctx: PluginContext): void {
   // Named exports only: the client registry reads the module's named exports,
   // and a default export would make a CommonJS consumer reach for `.default`.
 

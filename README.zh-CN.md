@@ -11,7 +11,7 @@ DeepSeek Harness 的 WSL 工作区插件。对
 
 | | |
 | --- | --- |
-| 版本 | 0.1.9 |
+| 版本 | 0.1.10 |
 | 宿主 | DeepSeek Harness `0.2.1-rc.5`（桌面版与 Web 版） |
 | Node | `>= 22` |
 | 发行版 | 任意 WSL2 发行版（在 Ubuntu 26.04 上测试） |
@@ -54,10 +54,14 @@ dsh-wsl 的问题请在本仓库提 issue；`dsh-wsl-workspace` 本身的问题�
   对共享而言每轮巡检都是一串多毫秒的元数据调用，会伸进发行版，而且 WSLg
   开着时每半分钟把焦点拉到 Windows 桌面一次。现在 agent 是按需被问询的，
   所以这些定时器是被删掉而不是被调优——空闲时没有任何东西碰发行版。
-- **`/mnt/<盘符>` 可用。** 9P 共享只服务 `ext4`，drvfs 挂载对它不可见，
-  这逼得旧插件把这些路径改路由到 Windows 盘符、靠探测每个盘来合成 `/mnt`
-  条目。在发行版内 `/mnt/c` 只是个目录，改路由和探测随之删掉，连同
-  「工作区键与它的路径不一致」这一类 bug 一起消失。
+- **`/mnt/<盘符>` 在发行版内可用，但不能当工作区根目录。** 9P 共享只服务 `ext4`，
+  drvfs 挂载对它不可见，这逼得旧插件把这些路径改路由到 Windows 盘符、靠探测
+  每个盘来合成 `/mnt` 条目。在发行版内 `/mnt/c` 只是个目录，改路由和探测随之
+  删掉，连同「工作区键与它的路径不一致」这一类 bug 一起消失——工具、终端和
+  文件对话框都能正常访问 `/mnt`。唯一的例外是把它注册成**工作区**：宿主用
+  `fs.realpath` 规范化每个工作区路径，而 Windows 解析不了 `/mnt` 以下的任何
+  东西（`EPERM`，drvfs 只挂在发行版内）。对话框会直说并禁用按钮，而不是
+  把这个错误抛给用户；项目请放在发行版自己的文件系统里（`/home/你/…`）。
 - **搜索在发行版内执行。** 旧插件的 `grep`/`glob` 是宿主工具，靠打包的
   Windows ripgrep 对共享跑：整仓走一遍 **44 s**（9P）对比发行版内
   **0.29 s**，内容搜索 **150 s** 对比 **0.79 s**，而且 9P 那次返回 22,436
@@ -73,7 +77,7 @@ dsh-wsl 的问题请在本仓库提 issue；`dsh-wsl-workspace` 本身的问题�
   注册表登记——WSL 工作区只是路径为 UNC（
   `\\wsl.localhost\Ubuntu\home\you\…`）的宿主工作区，只有这一条记录，
   没有会漂移的私有存储。路径框也可以直接输入：敲入
-  `/mnt/c/Users/you/projects` 回车，或输入相对当前目录的短名。深目录不该靠
+  `/home/你/projects` 回车，或输入相对当前目录的短名。深目录不该靠
   一层层点进去。
 - **侧栏终端跟着会话进发行版。** 工作区是 WSL 路径的会话，其终端*在发行版
   内*打开——真正的 bash 配真正的 pty（输入、输出、resize 全部回环）。
@@ -134,6 +138,12 @@ shipped-hidden 变体则保持收起。
 底部入口仍注册在 `sidebar.footer.action`（`list` 型 slot、
 `replaceRisk: "none"`、新 id `dsh-wsl-suite`）——标题栏席位在场时隐藏，标题栏
 缺席时作回退（rail 侧栏、发版改了类名）。它也是标题栏发现向上走的锚点。
+
+弹窗本身被 portal 到 `document.body`，不渲染在席位所在的子树里。侧栏会裁剪
+自己的子树（区域上的 `overflow: hidden`）并在 rail 上建立层叠上下文，所以从
+里面打开的 `position: fixed` 覆盖层会被画在那个裁剪祖先内部：弹窗挂载了、
+按钮也响应了，但什么也不出现。portal 到绘制根是宿主自家弹窗的做法，顺带
+让底部席位被隐藏、折叠或卸载时快捷键仍能打开弹窗。
 
 ### 快捷键
 
@@ -227,7 +237,7 @@ remove/reinstall 流程。
 `dsh-wsl-suite.tgz`（无需构建，因此跳过 `allowBuilds` 授权）：
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.9/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.10/dsh-wsl-suite.tgz
 ```
 
 资产名不含版本号、URL 钉死在 tag 上，后续发版不会让链接失效。
@@ -250,7 +260,7 @@ C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 
 因为安装副本是复制，每处源码改动都要重装；在 DeepSeek Harness 会话里：
 
-1. 源码树里 `npm run verify`（类型检查 + 构建 + 73 项检查）。
+1. 源码树里 `npm run verify`（类型检查 + 构建 + 76 项检查）。
 2. `plugin_manager remove_bundle target=dsh-wsl-suite`，然后
    `plugin_manager install_bundle target=file:E:\DshConfig\dsh-wsl-suite`。
 3. 重启 DSH（重装返回 `application: "restart-required"`）。
@@ -277,7 +287,7 @@ curl -X POST http://127.0.0.1:<gui-port>/dsh-wsl/api \\
 npm install          # devDependencies 钉住 0.2.1-rc.5 宿主接口
 npm run typecheck    # 还需 @deepseek-ai/dsh-llm（已钉在 devDependencies）
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 75 项检查；live 的在没有发行版时跳过而非失败
+npm test             # 76 项检查；live 的在没有发行版时跳过而非失败
 npm run verify       # 类型检查，然后 build + test
 ```
 

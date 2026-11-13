@@ -32,7 +32,7 @@ export interface HostEntryButtonProps {
  */
 export function HostEntryButton({ className, label, open, shortcutKeys, ariaKeyshortcuts }: HostEntryButtonProps): ReactElement {
   return (
-    <Tooltip label={label} side="bottom" delayMs={500} {...(shortcutKeys === undefined ? {} : { shortcutKeys })}>
+    <Tooltip label={label} side="bottom" delayMs={500} portal={true} {...(shortcutKeys === undefined ? {} : { shortcutKeys })}>
       <button
         type="button"
         className={`${className} dww-header-entry`}

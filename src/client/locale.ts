@@ -17,6 +17,7 @@ const ZH = {
   go: '前往',
   pathMissing: '该路径不存在',
   pathNotFolder: '这是一个文件，不是文件夹',
+  pathDrvfs: '这一层在 Windows 侧无法解析（/mnt 下的路径都是这样），宿主没法把它登记成工作区。把项目放在发行版自己的文件系统里（例如 /home/你/projects），或者用 Windows 盘符直接开一个 Windows 工作区。',
   noDistros: '没有找到 WSL 发行版',
   noDistrosHint: '先在 Windows 里安装一个（wsl --install -d Ubuntu），然后重新打开此对话框。',
   variantsMissing: '{count} 个 WSL 预设变体没能生成，WSL 新会话会退回宿主默认预设（详情见宿主日志）。',
@@ -34,6 +35,8 @@ const EN = {
   go: 'Go',
   pathMissing: 'That path does not exist',
   pathNotFolder: 'That path is a file, not a folder',
+  pathDrvfs:
+    'Windows cannot resolve anything below /mnt, so the host cannot register it as a workspace. Keep the project on the distribution filesystem (for example /home/you/projects), or open a Windows workspace at the drive path instead.',
   noDistros: 'No WSL distribution found',
   noDistrosHint: 'Install one on Windows first (wsl --install -d Ubuntu), then reopen this dialog.',
   variantsMissing: '{count} WSL preset variant(s) could not be generated, so new WSL sessions fall back to the host preset (details in the host log).',

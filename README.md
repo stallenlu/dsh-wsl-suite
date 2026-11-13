@@ -10,7 +10,7 @@ reached over a JSON-lines pipe, instead of a 9P file share plus a spawn per comm
 
 | | |
 | --- | --- |
-| Version | 0.1.9 |
+| Version | 0.1.10 |
 | Harness | DeepSeek Harness `0.2.1-rc.5` (desktop & web) |
 | Node | `>= 22` |
 | Distro | any WSL2 distro (tested on Ubuntu 26.04) |
@@ -55,11 +55,17 @@ Three consequences follow, and all three are the point of the rebuild:
   metadata calls that reaches into the distro and, when WSLg is on, pulls focus to the
   Windows desktop every half minute. The agent is asked on demand, so those timers are
   gone rather than tuned — nothing touches the distro while it is idle.
-- **`/mnt/<drive>` works.** A 9P share serves `ext4` only; the drvfs mounts are
-  invisible to it, which forced the old plugin to reroute those paths to Windows
-  drive letters and to synthesize `/mnt` entries by probing every drive. Inside the
-  distribution `/mnt/c` is just a directory, so the rerouting and the probe are deleted
-  along with the class of bug where a workspace key and its path disagreed.
+- **`/mnt/<drive>` works inside the distro, but not as a workspace root.** A 9P share
+  serves `ext4` only; the drvfs mounts are invisible to it, which forced the old plugin
+  to reroute those paths to Windows drive letters and to synthesize `/mnt` entries by
+  probing every drive. Inside the distribution `/mnt/c` is just a directory, so the
+  rerouting and the probe are deleted along with the class of bug where a workspace key
+  and its path disagreed — tools, the terminal and the file dialog all reach `/mnt`
+  normally. Registering one as a *workspace* is the exception: the host canonicalises
+  every workspace path with `fs.realpath`, and Windows cannot resolve anything below
+  `/mnt` (`EPERM`, drvfs is mounted inside the distro only). The dialog says so and
+  disables the button instead of surfacing that error; keep projects on the
+  distribution filesystem (`/home/you/…`).
 - **Search runs in the distribution.** `grep` and `glob` are the shipped tools backed by
   a packaged Windows `ripgrep`, which against a share is not merely slow: a whole-home
   walk took **44 s** over 9P versus **0.29 s** in-distro, a content search **150 s**
@@ -77,7 +83,7 @@ Three consequences follow, and all three are the point of the rebuild:
   own workspace registry — a WSL workspace is just a host workspace whose path is a UNC
   path (`\\wsl.localhost\Ubuntu\home\you\…`), so there is exactly one record and no
   private store to drift. The path field takes a typed path as well as a click: type
-  `/mnt/c/Users/you/projects` and press Enter, or a bare name relative to the directory
+  `/home/you/projects` and press Enter, or a bare name relative to the directory
   on screen. Holding depth in a folder tree is not a navigation problem to click through.
 - **The sidebar terminal follows the session in.** A session whose workspace is a WSL
   path opens its terminal *inside* the distribution — a real bash with a real pty
@@ -141,6 +147,14 @@ The footer entry stays registered on `sidebar.footer.action` (a `list` slot,
 `replaceRisk: "none"`, fresh id `dsh-wsl-suite`) — hidden while the header seat is present,
 and the fallback when the header is absent (rail sidebar, a release that renames the
 classes). It is also the anchor the header discovery walks up from.
+
+The dialog itself is portalled to `document.body`, not rendered where the seat lives.
+The sidebar clips its own subtree (`overflow: hidden` on the region) and puts a stacking
+context on the rail, so a `position: fixed` overlay opened from inside it is painted
+inside that clipping ancestor: the dialog mounts, the button responds, and nothing
+appears. Portalling to the paint root is what the shell's own dialogs do, and it also
+means the keybinding still opens a dialog when the footer seat is hidden, collapsed or
+unmounted.
 
 ### The keybinding
 
@@ -254,7 +268,7 @@ push — no `file:`-style remove/reinstall dance.
 `dsh-wsl-suite.tgz` (no build step, so it skips the `allowBuilds` approval):
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.9/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.10/dsh-wsl-suite.tgz
 ```
 
 The asset name carries no version number and the URL is pinned to a tag, so the
@@ -281,7 +295,7 @@ C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 Because the installed copy is a copy, every source change needs a reinstall; from a
 DeepSeek Harness session:
 
-1. `npm run verify` in the source tree (typecheck + build + 73 checks).
+1. `npm run verify` in the source tree (typecheck + build + 76 checks).
 2. `plugin_manager remove_bundle target=dsh-wsl-suite`, then
    `plugin_manager install_bundle target=file:E:\DshConfig\dsh-wsl-suite`.
 3. Restart DSH (the reinstall answers `application: "restart-required"`).
@@ -308,7 +322,7 @@ entries proves the whole pipe.
 npm install          # devDependencies pin the 0.2.1-rc.5 host surface
 npm run typecheck    # also needs @deepseek-ai/dsh-llm (pinned in devDependencies)
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 75 checks; live ones skip when no distro is present
+npm test             # 76 checks; live ones skip when no distro is present
 npm run verify       # typecheck, then build + test
 ```
 

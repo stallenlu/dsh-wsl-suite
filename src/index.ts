@@ -83,6 +83,25 @@ export const Config: z<Config> = z.object({
 const DEFAULT_ROUTE = '/dsh-wsl/api'
 const MAX_BODY_BYTES = 64 * 1024
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1'])
+/** drvfs mount root: the one subtree the host cannot canonicalise. */
+const MNT_ROOT = '/mnt'
+
+/**
+ * Why `path` cannot become a WSL workspace, or `undefined` when it can.
+ *
+ * `/mnt` itself is resolvable from Windows (so `/mnt` was creatable, which is
+ * how this looked like a bug in one specific folder); every level below it is
+ * not, because the drvfs mounts are only mounted inside the distribution. The
+ * registry canonicalises with `realpath`, so the decision belongs here, before
+ * the registry is asked — and it is a string test, so it needs no I/O.
+ */
+export function workspacePathProblem(path: string): string | undefined {
+  if (path !== MNT_ROOT && !path.startsWith(`${MNT_ROOT}/`)) return undefined
+  return (
+    `${path} is under ${MNT_ROOT}, which Windows cannot resolve, so the host cannot register it as a workspace. ` +
+    'Keep the project on the distribution filesystem (for example /home/you/projects), or open a Windows workspace at the drive path instead.'
+  )
+}
 
 // --- host seams this plugin consumes -------------------------------------
 // Neither shape is published by the installed packages, so they are declared
@@ -329,6 +348,15 @@ async function dispatch(
     case 'createWorkspace': {
       const distro = requireString(body, 'distro')
       const path = requireString(body, 'path')
+      // Nothing under `/mnt` can be a workspace. Those entries are drvfs
+      // mounts (or the distribution's own tmpfs at `/mnt/wsl*`), and Windows
+      // cannot resolve either: `realpath` on the UNC form answers EPERM one
+      // level below `/mnt` while `/mnt` itself resolves. The registry
+      // canonicalises every path through `realpath`, so the call was always
+      // going to fail there — it just failed with `EPERM, realpath
+      // '\\wsl.localhost\...'`, which reads like a bug rather than a limit.
+      const problem = workspacePathProblem(path)
+      if (problem !== undefined) throw new Error(problem)
       const unc = toUnc(distro, path)
       const registry = ctx.get('workspaceRegistry') as unknown as WorkspaceRegistryService | undefined
       if (registry === undefined) throw new Error('this host exposes no workspace registry')

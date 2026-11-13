@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { containsPosix, driveToMnt, parseUnc, resolveAddress, toPosix, toUnc } from '../src/paths.ts'
+import { workspacePathProblem } from '../src/index.ts'
 
 const UNC_HOME = String.raw`\\wsl.localhost\Ubuntu\home\sidady`
 /** `\\wsl$\Ubuntu\` — no trailing backslash in the literal, it would escape the backtick. */
@@ -42,4 +43,19 @@ test('resolveAddress prefers an explicit distro and falls back to the base', () 
     path: '/home/u/rel',
   })
   assert.equal(resolveAddress('C:\\x'), undefined)
+})
+
+test('a workspace path is refused under /mnt, and only there', () => {
+  // Windows resolves `/mnt` itself but nothing below it: the drvfs mounts are
+  // mounted inside the distribution only, so `realpath` on the UNC form answers
+  // EPERM one level down. `/mnt` was creatable, which is why the failure looked
+  // like it was about one particular folder.
+  assert.match(workspacePathProblem('/mnt/c/Users/you/projects') ?? '', /\/mnt/)
+  assert.match(workspacePathProblem('/mnt') ?? '', /\/mnt/)
+  assert.match(workspacePathProblem('/mnt/e') ?? '', /\/mnt/)
+  assert.equal(workspacePathProblem('/home/sidady/projects'), undefined)
+  assert.equal(workspacePathProblem('/'), undefined)
+  // A name that merely starts with the letters must not be caught by a prefix
+  // test that forgot the separator.
+  assert.equal(workspacePathProblem('/mnt-projects/x'), undefined)
 })

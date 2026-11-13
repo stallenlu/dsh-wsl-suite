@@ -116,6 +116,12 @@ function loadBundle(): {
       effects.push(label ?? '')
       body()
     },
+    // `ctx.inject(deps, body)` is cordis's wait-for-service hook: it hands back a
+    // scope with the same `get`/`effect` surface once the service exists. The
+    // stub resolves at once so the registration assertions see the command.
+    inject(_deps: string[], body: (scope: unknown) => void) {
+      body(ctx)
+    },
   }
   let module: ClientModule | undefined
   let bundleId = ''
@@ -262,6 +268,15 @@ test('the mounted action mirrors a W entry beside the workspace header add contr
           ? { register: () => () => {}, catalog: { getSnapshot: () => CATALOG, subscribe: () => () => {} } }
           : undefined,
     effect: (body: () => unknown) => { body() },
+    inject: (_deps: string[], body: (scope: unknown) => void) => {
+      body({
+        get: (name: string) =>
+          name === 'shortcuts'
+            ? { register: () => () => {}, catalog: { getSnapshot: () => CATALOG, subscribe: () => () => {} } }
+            : undefined,
+        effect: (inner: () => unknown) => { inner() },
+      })
+    },
   })
 
   try {
@@ -315,26 +330,37 @@ test('the mounted action mirrors a W entry beside the workspace header add contr
       assert.equal(resolution.status, 'handled')
       resolution.run?.()
     })
-    assert.ok(container.querySelector('.dww-overlay'), 'the keybinding opens the dialog')
+    // The dialog portals to `body`: the footer seat is clipped by the
+    // sidebar's own overflow/stacking context, so a fixed overlay opened from
+    // inside it never paints where the user can see it.
+    assert.ok(window.document.querySelector('.dww-overlay'), 'the keybinding opens the dialog')
 
     // Clicking the entry opens the dialog through the same opener.
     entry.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await act(async () => {})
-    assert.match(container.textContent ?? '', new RegExp(strings().addTitle))
-    assert.ok(container.querySelector('.dww-overlay'), 'the dialog overlay is mounted')
+    assert.match(window.document.body.textContent ?? '', new RegExp(strings().addTitle))
+    assert.ok(window.document.querySelector('.dww-overlay'), 'the dialog overlay is mounted')
 
     // The overlay carries `dsb-root`: the baseline maps its neutrals on that
     // element rather than on :root, because the host declares its dark theme on
     // `body[data-ds-dark-theme]` and a :root mapping would never see it.
-    const overlay = container.querySelector('.dww-overlay')!
+    const overlay = window.document.querySelector('.dww-overlay')!
     assert.ok(overlay.classList.contains('dsb-root'), 'the dialog root is a baseline root')
+    // The seat renders inside the sidebar, whose region clips
+    // (`overflow: hidden`) and whose rail is a stacking context: a fixed
+    // overlay left in that subtree paints inside the clip and the dialog
+    // looks like it never opened. It must hang off `body` instead.
+    assert.ok(
+      !container.contains(overlay) && window.document.body.contains(overlay),
+      'the dialog is portalled out of the sidebar subtree onto body',
+    )
 
     // The dialog asks the route for distros on mount (network is not stubbed:
     // the call fails and the error strip renders — behavior, not data, checked).
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10))
     })
-    assert.ok(container.querySelector('.dww-error'), 'a failed route call renders the error strip')
+    assert.ok(window.document.querySelector('.dww-error'), 'a failed route call renders the error strip')
 
     // Flush the observers' queued microtasks while the DOM is still alive:
     // after dom.window.close() a straggler observer callback reads the dead
@@ -430,7 +456,7 @@ test('the dialog takes a typed path, closes on Escape, and admits a degraded pre
     await act(async () => {})
 
     // The failed variant is called out, with the count the route reported.
-    const warning = container.querySelector('.dww-warn')
+    const warning = window.document.body.querySelector('.dww-warn')
     assert.ok(warning, 'a failed preset pass is surfaced in the dialog')
     assert.match(warning!.textContent ?? '', /1/)
     assert.deepEqual(
@@ -440,7 +466,7 @@ test('the dialog takes a typed path, closes on Escape, and admits a degraded pre
     )
 
     // A typed path is a first-class way in, not just clicking down the tree.
-    const input = container.querySelector('input.dww-input') as HTMLInputElement | null
+    const input = window.document.body.querySelector('input.dww-input') as HTMLInputElement | null
     assert.ok(input, 'the path field is rendered')
     assert.equal(input!.value, '/home', 'the dialog opens on a starting directory')
 
@@ -462,12 +488,30 @@ test('the dialog takes a typed path, closes on Escape, and admits a degraded pre
     assert.ok(listed.includes('/mnt/c'), `typed path was not listed: ${JSON.stringify(listed)}`)
     assert.equal(input!.value, '/mnt/c', 'the field follows the directory the dialog moved to')
 
+    // `/mnt` is browsable from inside the distribution but not resolvable by
+    // Windows, so the host could never canonicalise a workspace there. The
+    // dialog says so before the click instead of round-tripping to an
+    // `EPERM, realpath` that reads like a broken path.
+    const drvfsNote = [...window.document.body.querySelectorAll('.dww-warn')].at(-1)
+    assert.match(drvfsNote?.textContent ?? '', /\/mnt/)
+    const add = [...window.document.body.querySelectorAll('button.dww-btn')].at(-1) as HTMLButtonElement
+    assert.equal(add.disabled, true, 'adding a drvfs folder is not offered')
+    await act(async () => {
+      add.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    assert.equal(
+      calls.filter((call) => call.method === 'createWorkspace').length,
+      0,
+      'a drvfs path never reaches the route: the host would answer EPERM',
+    )
+
     // Escape closes the dialog. Mounted with a capture-phase listener, so the
     // host does not also see the key.
     await act(async () => {
       window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
-    assert.equal(container.querySelector('.dww-overlay'), null, 'Escape closes the dialog')
+    assert.equal(window.document.querySelector('.dww-overlay'), null, 'Escape closes the dialog')
   } finally {
     unmount()
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -528,9 +572,9 @@ test('a machine with no distribution says so instead of showing an empty select'
     })
 
     const t = strings()
-    assert.match(container.textContent ?? '', new RegExp(t.noDistros), 'the empty state names the problem')
-    assert.match(container.textContent ?? '', new RegExp(t.noDistrosHint), 'and says what to do about it')
-    assert.equal(container.querySelector('select.dww-select'), null, 'no empty select is offered')
+    assert.match(window.document.body.textContent ?? '', new RegExp(t.noDistros), 'the empty state names the problem')
+    assert.match(window.document.body.textContent ?? '', new RegExp(t.noDistrosHint), 'and says what to do about it')
+    assert.equal(window.document.querySelector('select.dww-select'), null, 'no empty select is offered')
   } finally {
     unmount()
     await new Promise((resolve) => setTimeout(resolve, 20))
