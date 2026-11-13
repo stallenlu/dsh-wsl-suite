@@ -23,8 +23,6 @@ export type Op =
   | 'read'
   | 'readRange'
   | 'write'
-  | 'remove'
-  | 'mkdir'
   | 'exec'
   | 'kill'
 

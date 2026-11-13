@@ -43,6 +43,12 @@ export function wslWorldGroup(paths: WorldPaths): Row {
   if (paths.nodePath) config['nodePath'] = paths.nodePath
   const provider = (id: string, name: string): Row =>
     Object.keys(config).length === 0 ? { id, name } : { id, name, config: { ...config } }
+  // The search row takes only what it reads: the pinned distro (when the world
+  // pins one) and the agent executable, which must match the shell and fs rows
+  // or the tools would open a second agent for the same distro.
+  const searchConfig: Row = {}
+  if (paths.distro) searchConfig['distro'] = paths.distro
+  if (paths.nodePath) searchConfig['nodePath'] = paths.nodePath
   return {
     id: 'wsl-world',
     name: 'cordis:group',
@@ -51,11 +57,11 @@ export function wslWorldGroup(paths: WorldPaths): Row {
     config: [
       provider(WSL_PROVIDERS.shell, paths.shell),
       provider(WSL_PROVIDERS.fs, paths.fs),
-      // Registers the `grep` / `glob` tools. It takes only the distro — the
-      // search directory comes from the session path, like every other row.
-      paths.distro
-        ? { id: WSL_PROVIDERS.search, name: paths.search, config: { distro: paths.distro } }
-        : { id: WSL_PROVIDERS.search, name: paths.search },
+      // Registers the `grep` / `glob` tools. The search directory comes from
+      // the session path, like every other row.
+      Object.keys(searchConfig).length === 0
+        ? { id: WSL_PROVIDERS.search, name: paths.search }
+        : { id: WSL_PROVIDERS.search, name: paths.search, config: { ...searchConfig } },
     ],
   }
 }

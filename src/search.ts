@@ -197,12 +197,13 @@ function renderMatches(matches: GrepMatch[], total: number): ContentBlock[] {
 /**
  * Register the two tools and their prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it.
- * @param config - the world's pinned distribution, when one was configured.
+ * @param config - the world's pinned distribution and agent executable, when configured.
  */
-export function apply(ctx: Context, config?: { distro?: string }): void {
+export function apply(ctx: Context, config?: { distro?: string; nodePath?: string }): void {
   const tools = ctx.get('tools') as unknown as ToolsFace | undefined
   if (tools === undefined) return
   const pinned = config?.distro
+  const nodePath = config?.nodePath ?? 'node'
 
   const targetOf = (exec: ExecFace): Target => {
     const target = resolveTarget(exec.agent?.session.header.cwd, pinned)
@@ -228,7 +229,7 @@ export function apply(ctx: Context, config?: { distro?: string }): void {
    * reported as an error, carrying ripgrep's own reason.
    */
   const run = async (target: Target, command: string, signal: AbortSignal): Promise<string> => {
-    const channel = await channelFor(target.distro)
+    const channel = await channelFor(target.distro, nodePath)
     let stdout = ''
     let stderr = ''
     const { reply } = channel.begin(

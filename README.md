@@ -10,7 +10,7 @@ reached over a JSON-lines pipe, instead of a 9P file share plus a spawn per comm
 
 | | |
 | --- | --- |
-| Version | 0.1.8 |
+| Version | 0.1.9 |
 | Harness | DeepSeek Harness `0.2.1-rc.5` (desktop & web) |
 | Node | `>= 22` |
 | Distro | any WSL2 distro (tested on Ubuntu 26.04) |
@@ -76,7 +76,9 @@ Three consequences follow, and all three are the point of the rebuild:
   browses the Linux filesystem; “添加此文件夹” registers the folder through the host's
   own workspace registry — a WSL workspace is just a host workspace whose path is a UNC
   path (`\\wsl.localhost\Ubuntu\home\you\…`), so there is exactly one record and no
-  private store to drift.
+  private store to drift. The path field takes a typed path as well as a click: type
+  `/mnt/c/Users/you/projects` and press Enter, or a bare name relative to the directory
+  on screen. Holding depth in a folder tree is not a navigation problem to click through.
 - **The sidebar terminal follows the session in.** A session whose workspace is a WSL
   path opens its terminal *inside* the distribution — a real bash with a real pty
   (input, output and resize all round-trip). Windows-cwd sessions are untouched.
@@ -84,8 +86,27 @@ Three consequences follow, and all three are the point of the rebuild:
   replaces the shell/fs tools with the WSL ones and adds `grep`/`glob` that run the
   distro's own ripgrep — including `/mnt/<drive>` and unreadable-directory tolerance
   (exit 2 keeps the partial results instead of failing the call).
+- **Failures say what happened.** A distribution with no reachable `node` reports which
+  non-login shell was searched and what to do about it (nvm/fnm/volta users: a login
+  shell hides this, the agent does not get one); a machine with no distribution at all
+  says so instead of showing an empty picker; a preset twin that failed to publish is
+  called out in the dialog, because the symptom would otherwise be new WSL sessions
+  quietly running the host default.
 - **Localized.** The dialog follows `navigator.language`: Simplified Chinese for
   `zh-*`, English otherwise.
+
+## Configuration
+
+Two fields, both optional:
+
+| field | default | meaning |
+| --- | --- | --- |
+| `nodePath` | `node` | The executable that starts the in-distro agent. Resolved against the **non-login** path, which is what `wsl.exe --exec` gets — an nvm/fnm/volta install is not on it, so pin an absolute path there. |
+| `defaultPreset` | `wsl-standard` | The twin a new WSL session starts in. An empty string keeps the host default. |
+
+The browser route is deliberately **not** configurable: the client bundle is
+prebuilt and cannot read the host's config, so a configurable endpoint would only
+produce a dialog that called a route nobody registered.
 
 ## What is in here
 
@@ -197,6 +218,13 @@ process.platform === 'win32'` gate off a row it lifts into the world: that expre
 evaluated by the loader on the host, so carrying it along would disable the very tool the
 variant exists to provide.
 
+Variants are built once, when the plugin applies. A preset that another plugin
+registers *after* that (install a plugin that declares a new mode without restarting)
+gets no twin until the next start — the roster exposes no change event to hook, and
+polling it to mount full preset trees on a guess is not worth the cost. The dialog
+surfaces the count of variants that failed to publish, so a silent miss shows up as a
+warning rather than as sessions that inexplicably run the host preset.
+
 `!!js` expressions survive the round trip as `{__jsExpr: …}` nodes, which is the shape the
 host loader itself tests for, so a re-registered preset still evaluates its own gates.
 
@@ -226,7 +254,7 @@ push — no `file:`-style remove/reinstall dance.
 `dsh-wsl-suite.tgz` (no build step, so it skips the `allowBuilds` approval):
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.8/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.9/dsh-wsl-suite.tgz
 ```
 
 The asset name carries no version number and the URL is pinned to a tag, so the
@@ -280,7 +308,7 @@ entries proves the whole pipe.
 npm install          # devDependencies pin the 0.2.1-rc.5 host surface
 npm run typecheck    # also needs @deepseek-ai/dsh-llm (pinned in devDependencies)
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 73 checks; live ones skip when no distro is present
+npm test             # 75 checks; live ones skip when no distro is present
 npm run verify       # typecheck, then build + test
 ```
 

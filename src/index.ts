@@ -60,17 +60,26 @@ export const inject = ['webServer']
 
 /** Validated plugin config. */
 export interface Config {
-  /** HTTP path the browser dialog calls. */
-  route: string
+  /**
+   * Executable that starts the in-distro agent, as seen from inside the distro.
+   * A bare `node` is resolved on the non-login PATH, which is where nvm/fnm
+   * installs are absent — pin an absolute path when the distro has one of those.
+   */
+  nodePath: string
   /** New WSL-workspace sessions start in this preset; empty disables the default. */
   defaultPreset: string
 }
 
 export const Config: z<Config> = z.object({
-  route: z.string().default('/dsh-wsl/api'),
+  nodePath: z.string().default('node'),
   defaultPreset: z.string().default('wsl-standard'),
 })
 
+/**
+ * The browser's endpoint. Not configurable: the client bundle is built ahead of
+ * time and cannot read host config, so a configurable path could only ever
+ * produce a dialog that calls a route nobody registered.
+ */
 const DEFAULT_ROUTE = '/dsh-wsl/api'
 const MAX_BODY_BYTES = 64 * 1024
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1'])
@@ -210,6 +219,19 @@ interface DirEntry {
   link: boolean
 }
 
+/**
+ * What the preset pass produced, kept for the dialog.
+ *
+ * Variant publication happens once, detached, at boot. Without this the only
+ * trace of a failure is a console line the user never sees, and the symptom —
+ * WSL sessions quietly running the host's `standard` preset — looks like the
+ * plugin ignoring them.
+ */
+interface RouteState {
+  produced: string[]
+  failed: { id: string; reason: string }[]
+}
+
 function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -264,15 +286,25 @@ function requireString(body: Record<string, unknown>, field: string): string {
  * special case: drvfs is an ordinary mounted filesystem from inside the
  * distribution and invisible from the Windows side.
  */
-async function dispatch(ctx: Context, method: string, body: Record<string, unknown>): Promise<unknown> {
+async function dispatch(
+  ctx: Context,
+  method: string,
+  body: Record<string, unknown>,
+  nodePath: string,
+  state: RouteState,
+): Promise<unknown> {
   switch (method) {
     case 'listDistros':
       return { distros: listDistros() }
 
+    case 'status':
+      // Read-only: which variants exist, and why any are missing.
+      return { produced: [...state.produced], failed: [...state.failed] }
+
     case 'listDir': {
       const distro = requireString(body, 'distro')
       const path = requireString(body, 'path')
-      const channel = await channelFor(distro)
+      const channel = await channelFor(distro, nodePath)
       const entries = (await channel.ok({ op: 'readdir', p: path })).entries ?? []
       const list: DirEntry[] = entries.map((entry) => ({ name: entry.n, dir: entry.d, link: entry.l }))
       list.sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name))
@@ -282,7 +314,7 @@ async function dispatch(ctx: Context, method: string, body: Record<string, unkno
     case 'check': {
       const distro = requireString(body, 'distro')
       const path = requireString(body, 'path')
-      const channel = await channelFor(distro)
+      const channel = await channelFor(distro, nodePath)
       try {
         const stat = (await channel.ok({ op: 'stat', p: path })).st
         return { exists: true, dir: stat?.dir === true }
@@ -377,6 +409,7 @@ function stillActive(ctx: Context): boolean {
 export async function materialize(
   ctx: Context,
   presets: PresetsService,
+  nodePath = 'node',
 ): Promise<{ produced: string[]; failed: { id: string; reason: string }[] }> {
   const produced: string[] = []
   const failed: { id: string; reason: string }[] = []
@@ -390,6 +423,9 @@ export async function materialize(
       shell: entry('shell.js'),
       fs: entry('fs.js'),
       search: entry('search.js'),
+      // A pinned executable has to reach all three providers, or the world runs
+      // two agents for one distro (the channel is keyed by distro + nodePath).
+      nodePath,
     })
     // The group serves whichever distribution the path names, so ONE variant
     // covers every distro — adding a distro needs no republish.
@@ -441,11 +477,12 @@ export async function materialize(
   }
   return { produced, failed }
 }
-
 // --- plugin entry --------------------------------------------------------
 
 export function apply(ctx: Context, config: Config): void {
-  const route = config.route === '' ? DEFAULT_ROUTE : config.route
+  const route = DEFAULT_ROUTE
+  // Filled by the preset pass below; read by the `status` method.
+  const state: RouteState = { produced: [], failed: [] }
 
   ctx.effect(() => {
     const server = ctx.get('webServer') as unknown as WebServerService | undefined
@@ -471,7 +508,7 @@ export function apply(ctx: Context, config: Config): void {
         }
         const method = typeof body['method'] === 'string' ? body['method'] : ''
         try {
-          json(res, 200, { ok: true, value: await dispatch(ctx, method, body) })
+          json(res, 200, { ok: true, value: await dispatch(ctx, method, body, config.nodePath, state) })
         } catch (error) {
           json(res, 200, { ok: false, error: messageOf(error) })
         }
@@ -486,8 +523,10 @@ export function apply(ctx: Context, config: Config): void {
   const presets = ctx.get('agentPresets') as unknown as PresetsService | undefined
   if (presets !== undefined && typeof presets.readDocument === 'function') {
     ctx.effect(() => {
-      void materialize(ctx, presets)
+      void materialize(ctx, presets, config.nodePath)
         .then((outcome) => {
+          state.produced = outcome.produced
+          state.failed = outcome.failed
           for (const id of outcome.produced) catalog.ids.add(id)
           // A typo or a broken source preset would otherwise fail silently: the
           // wrapper only ever sees `catalog`, so a configured target that never

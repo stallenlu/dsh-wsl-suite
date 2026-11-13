@@ -41,7 +41,8 @@ test('both ends answer exactly the same op table', () => {
   // A one-sided addition is the defect this guards: the host would send an op
   // the agent answers with EOP, or the agent would grow a handler nothing calls.
   assert.deepEqual(answered, declared)
-  assert.ok(declared.length >= 12, `only ${declared.length} ops found`)
+  // A floor, so a refactor cannot quietly empty the table and still pass.
+  assert.ok(declared.length >= 10, `only ${declared.length} ops found`)
 })
 
 test('the agent-local failure codes match what the agent emits', () => {

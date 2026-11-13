@@ -15,6 +15,34 @@ import { JSDOM } from 'jsdom'
 import { strings } from '../src/client/locale.ts'
 
 const require = createRequire(import.meta.url)
+
+// React decides once, at module load, whether this realm supports `input`
+// events. Loaded with no document (as the node-side tests would), it falls back
+// to the IE `onpropertychange` path and throws `attachEvent is not a
+// function` on every focus. Warm it up under a throwaway DOM so the React
+// tests exercise the real event path; the tests still install their own.
+{
+  const boot = new JSDOM('<!doctype html>')
+  const bootGlobals = globalThis as Record<string, unknown>
+  bootGlobals['window'] = boot.window
+  bootGlobals['document'] = boot.window.document
+  bootGlobals['MutationObserver'] = boot.window.MutationObserver
+  require('react')
+  require('react-dom/client')
+  require('react-dom/server')
+  delete bootGlobals['window']
+  delete bootGlobals['document']
+  delete bootGlobals['MutationObserver']
+}
+
+/** Poll until `predicate` holds, so a test waits on behavior instead of a timer. */
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('waitFor timed out')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
 const bundlePath = new URL('../lib/client.js', import.meta.url)
 
 /** What the stub registry saw, so the assertions can inspect the component. */
@@ -324,6 +352,193 @@ test('the mounted action mirrors a W entry beside the workspace header add contr
     globals['document'] = saved['document']
     globals['MutationObserver'] = saved['MutationObserver']
     globals['IS_REACT_ACT_ENVIRONMENT'] = saved['IS_REACT_ACT_ENVIRONMENT']
+    dom.window.close()
+  }
+})
+
+test('the dialog takes a typed path, closes on Escape, and admits a degraded preset pass', async () => {
+  const { registered } = loadBundle()
+  const Action = registered[0]!.component as never as (props: Record<string, unknown>) => unknown
+  const { createElement, act } = require('react') as typeof import('react')
+  const { createRoot } = require('react-dom/client') as typeof import('react-dom/client')
+
+  // The route is what the dialog is *for*, so this test answers it instead of
+  // letting every call fail: typing a path is only meaningful if `check` and
+  // `listDir` come back with something.
+  const calls: { method: string; params: Record<string, unknown> }[] = []
+  const answer = (method: string): unknown => {
+    if (method === 'listDistros') return { distros: [{ name: 'Ubuntu', default: true }] }
+    // One variant failed to publish. The plugin still works, but new WSL
+    // sessions would silently run the host preset — the dialog has to say so.
+    if (method === 'status') return { produced: ['wsl-standard'], failed: [{ id: 'wsl-broken', reason: 'nope' }] }
+    if (method === 'check') return { exists: true, dir: true }
+    if (method === 'listDir') return { entries: [{ name: 'c', dir: true, link: false }] }
+    return {}
+  }
+
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost/' })
+  const { window } = dom
+  const globals = globalThis as Record<string, unknown>
+  const saved = {
+    window: globals['window'],
+    document: globals['document'],
+    IS_REACT_ACT_ENVIRONMENT: globals['IS_REACT_ACT_ENVIRONMENT'],
+    MutationObserver: globals['MutationObserver'],
+    fetch: globals['fetch'],
+  }
+  globals['window'] = window
+  globals['document'] = window.document
+  globals['MutationObserver'] = window.MutationObserver
+  globals['IS_REACT_ACT_ENVIRONMENT'] = true
+  globals['fetch'] = async (_url: string, init: { body: string }) => {
+    const { method, ...params } = JSON.parse(init.body) as { method: string } & Record<string, unknown>
+    calls.push({ method, params })
+    return { ok: true, status: 200, json: async () => ({ ok: true, value: answer(method) }) }
+  }
+
+  const container = window.document.getElementById('root')!
+  let unmount = (): void => {}
+  container.innerHTML = `
+    <div class="GAkraW_root">
+      <div class="GAkraW_sectionHeader">
+        <span class="GAkraW_sectionLabel">工作区</span>
+        <div class="GAkraW_headerActions">
+          <button type="button" class="GAkraW_iconButton" aria-label="添加工作区">+</button>
+        </div>
+      </div>
+      <div class="GAkraW_footer"><div id="footer-slot"></div></div>
+    </div>`
+
+  try {
+    const reactRoot = createRoot(container.querySelector('#footer-slot')!)
+    unmount = () => reactRoot.unmount()
+    await act(async () => {
+      reactRoot.render(createElement(Action as never, { wide: true }))
+    })
+
+    const entry = container.querySelector('button.dww-header-entry') as HTMLButtonElement
+    assert.ok(entry, 'the entry is mounted before the dialog is opened')
+    entry.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    // Flush the click first: `act` only commits state when its callback
+    // resolves, so waiting inside the same call would wait on a dialog that
+    // was never rendered.
+    await act(async () => {})
+    // Then wait for the opening browse to finish, not a fixed delay: typing
+    // while the first `check`/`listDir` pair is still in flight would race
+    // its `setDraft` and make this test pass or fail on timing.
+    await waitFor(() => calls.some((call) => call.method === 'listDir'))
+    await act(async () => {})
+
+    // The failed variant is called out, with the count the route reported.
+    const warning = container.querySelector('.dww-warn')
+    assert.ok(warning, 'a failed preset pass is surfaced in the dialog')
+    assert.match(warning!.textContent ?? '', /1/)
+    assert.deepEqual(
+      calls.filter((call) => call.method === 'status').length,
+      1,
+      'the dialog asks the route for preset status once',
+    )
+
+    // A typed path is a first-class way in, not just clicking down the tree.
+    const input = container.querySelector('input.dww-input') as HTMLInputElement | null
+    assert.ok(input, 'the path field is rendered')
+    assert.equal(input!.value, '/home', 'the dialog opens on a starting directory')
+
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setValue.call(input, '/mnt/c')
+      input!.dispatchEvent(new window.Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      input!.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+
+    // Enter ran the same `check` + `listDir` pair a click runs, on the typed
+    // path — that pair is what tells a file from a folder.
+    const checked = calls.filter((call) => call.method === 'check').map((call) => call.params['path'])
+    assert.ok(checked.includes('/mnt/c'), `typed path was not checked: ${JSON.stringify(checked)}`)
+    const listed = calls.filter((call) => call.method === 'listDir').map((call) => call.params['path'])
+    assert.ok(listed.includes('/mnt/c'), `typed path was not listed: ${JSON.stringify(listed)}`)
+    assert.equal(input!.value, '/mnt/c', 'the field follows the directory the dialog moved to')
+
+    // Escape closes the dialog. Mounted with a capture-phase listener, so the
+    // host does not also see the key.
+    await act(async () => {
+      window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    assert.equal(container.querySelector('.dww-overlay'), null, 'Escape closes the dialog')
+  } finally {
+    unmount()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    globals['window'] = saved['window']
+    globals['document'] = saved['document']
+    globals['MutationObserver'] = saved['MutationObserver']
+    globals['IS_REACT_ACT_ENVIRONMENT'] = saved['IS_REACT_ACT_ENVIRONMENT']
+    globals['fetch'] = saved['fetch']
+    dom.window.close()
+  }
+})
+
+test('a machine with no distribution says so instead of showing an empty select', async () => {
+  const { registered } = loadBundle()
+  const Action = registered[0]!.component as never as (props: Record<string, unknown>) => unknown
+  const { createElement, act } = require('react') as typeof import('react')
+  const { createRoot } = require('react-dom/client') as typeof import('react-dom/client')
+
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost/' })
+  const { window } = dom
+  const globals = globalThis as Record<string, unknown>
+  const saved = {
+    window: globals['window'],
+    document: globals['document'],
+    IS_REACT_ACT_ENVIRONMENT: globals['IS_REACT_ACT_ENVIRONMENT'],
+    MutationObserver: globals['MutationObserver'],
+    fetch: globals['fetch'],
+  }
+  globals['window'] = window
+  globals['document'] = window.document
+  globals['MutationObserver'] = window.MutationObserver
+  globals['IS_REACT_ACT_ENVIRONMENT'] = true
+  globals['fetch'] = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, value: { distros: [] } }) })
+
+  const container = window.document.getElementById('root')!
+  let unmount = (): void => {}
+  container.innerHTML = `
+    <div class="GAkraW_root">
+      <div class="GAkraW_sectionHeader">
+        <span class="GAkraW_sectionLabel">工作区</span>
+        <div class="GAkraW_headerActions">
+          <button type="button" class="GAkraW_iconButton" aria-label="添加工作区">+</button>
+        </div>
+      </div>
+      <div class="GAkraW_footer"><div id="footer-slot"></div></div>
+    </div>`
+
+  try {
+    const reactRoot = createRoot(container.querySelector('#footer-slot')!)
+    unmount = () => reactRoot.unmount()
+    await act(async () => {
+      reactRoot.render(createElement(Action as never, { wide: true }))
+    })
+    const entry = container.querySelector('button.dww-header-entry') as HTMLButtonElement
+    entry.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+
+    const t = strings()
+    assert.match(container.textContent ?? '', new RegExp(t.noDistros), 'the empty state names the problem')
+    assert.match(container.textContent ?? '', new RegExp(t.noDistrosHint), 'and says what to do about it')
+    assert.equal(container.querySelector('select.dww-select'), null, 'no empty select is offered')
+  } finally {
+    unmount()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    globals['window'] = saved['window']
+    globals['document'] = saved['document']
+    globals['MutationObserver'] = saved['MutationObserver']
+    globals['IS_REACT_ACT_ENVIRONMENT'] = saved['IS_REACT_ACT_ENVIRONMENT']
+    globals['fetch'] = saved['fetch']
     dom.window.close()
   }
 })

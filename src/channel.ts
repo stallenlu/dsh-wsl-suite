@@ -12,7 +12,7 @@
  * @module dsh-wsl/channel
  */
 
-import { spawn, type ChildProcessByStdio } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcessByStdio } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import type { Readable, Writable } from 'node:stream'
@@ -21,8 +21,15 @@ import { CODE, type Reply, type Request } from './proto.ts'
 /** Idle time before a channel is closed, in milliseconds. */
 export const IDLE_TTL_MS = 10 * 60 * 1000
 
-/** Deadline for the agent's first `ping` after spawn, in milliseconds. */
-export const BOOT_TIMEOUT_MS = 20_000
+/**
+ * Deadline for the agent's first `ping` after spawn, in milliseconds.
+ *
+ * Generous on purpose: this covers the distribution's own cold start, which on
+ * a freshly booted Windows (WSL's VM gone, memory reclaimed) regularly runs
+ * past half a minute. The cost of a longer deadline is only paid when the
+ * agent is actually broken, and then the failure path below explains it.
+ */
+export const BOOT_TIMEOUT_MS = 60_000
 
 /** Deadline applied to a request that carries none of its own, in milliseconds. */
 export const DEFAULT_DEADLINE_MS = 15 * 60 * 1000
@@ -58,6 +65,46 @@ function agentPath(distro: string): string {
 
 /** The child shape this module spawns: stdin and stdout piped, stderr discarded. */
 type ChannelChild = ChildProcessByStdio<Writable, Readable, null>
+
+/**
+ * Explain a failed boot, when the reason is knowable.
+ *
+ * The overwhelmingly common cause is that the executable this plugin starts the
+ * agent with is not on the distribution's *non-login* PATH — a distinction that
+ * bites every nvm/fnm/volta user, because those tools install `node` under
+ * `~/.local/bin` or `~/.nvm/...` and only a login shell puts it on PATH. The
+ * plugin runs `wsl.exe --exec node`, which is a non-login spawn, so the same
+ * machine happily reports `node v22` from `bash -lc` and fails here.
+ * @param distro - the distribution the boot targeted.
+ * @param nodePath - the executable name or path that was tried.
+ * @returns a one-line diagnosis, or `undefined` when probing found nothing to say.
+ */
+function nodeHint(distro: string, nodePath: string): string | undefined {
+  // A caller who pinned a path has already made the decision; report only the
+  // facts a bare `node` miss can be explained by.
+  if (nodePath.includes('/') && nodePath !== 'node') return undefined
+  let located: string
+  try {
+    // `command -v` in a non-login shell answers exactly the question the spawn
+    // asked, so an empty result is proof rather than a guess.
+    located = execFileSync('wsl.exe', ['-d', distro, '--exec', 'sh', '-c', 'command -v node || true'], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return undefined
+  }
+  if (located !== '') {
+    return `the agent died even though node is at ${located}; run "wsl.exe -d ${distro} --exec node --version" to check it`
+  }
+  return (
+    `node is not on the PATH of a non-login shell in ${distro} — install it ` +
+    `(sudo apt install nodejs) or set the plugin's nodePath to an absolute path ` +
+    `(nvm/fnm/volta users: a login shell hides this, the agent does not get one)`
+  )
+}
 
 /** One live conversation with an in-distro agent. */
 export class Channel {
@@ -104,7 +151,17 @@ export class Channel {
     }
 
     const channel = new Channel(distro, child)
-    await channel.#boot()
+    try {
+      await channel.#boot()
+    } catch (error) {
+      // stderr is discarded on the live pipe (see above), so a failed boot is
+      // otherwise just "closed: exit 127" — the one message a user cannot act
+      // on. Probe once, synchronously, to turn it into a real diagnosis.
+      const hint = nodeHint(distro, nodePath)
+      channel.close()
+      if (hint === undefined) throw error
+      throw new ChannelError(`${(error as Error).message} (${hint})`, 'ENOAGENT')
+    }
     return channel
   }
 
@@ -113,7 +170,13 @@ export class Channel {
     // Let the reader attach before the first write.
     await this.#booted
     const deadline = AbortSignal.timeout(BOOT_TIMEOUT_MS)
-    await this.call({ op: 'ping' }, deadline)
+    const reply = await this.call({ op: 'ping' }, deadline)
+    if (!reply.ok) {
+      throw new ChannelError(
+        `agent in ${this.distro} rejected its first ping: ${reply.code ?? 'unknown'}`,
+        reply.code ?? 'EPING',
+      )
+    }
   }
 
   /** Attach the line reader and settle every waiter when the pipe closes. */

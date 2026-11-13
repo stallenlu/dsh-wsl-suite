@@ -346,14 +346,6 @@ async function handle(req) {
       return reply({ id: req.id, ok: true, st: statOf(req.p, true) })
     }
 
-    case 'mkdir':
-      fs.mkdirSync(req.p, { recursive: true })
-      return reply({ id: req.id, ok: true })
-
-    case 'remove':
-      fs.rmSync(req.p, { recursive: true, force: true })
-      return reply({ id: req.id, ok: true })
-
     case 'kill': {
       const child = running.get(req.target)
       if (child) killTree(child)

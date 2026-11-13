@@ -153,15 +153,26 @@ function parentPath(path: string): string {
   return cut <= 0 ? JOINT : path.slice(0, cut)
 }
 
+/** Collapse repeated and trailing slashes; an empty path is the root. */
+function normalizePath(raw: string): string {
+  const collapsed = raw.replace(/\/{2,}/g, JOINT)
+  if (collapsed === '') return JOINT
+  return collapsed.length > 1 && collapsed.endsWith(JOINT) ? collapsed.slice(0, -1) : collapsed
+}
+
 function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
   const t = strings()
   const [distros, setDistros] = useState<Distro[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [distro, setDistro] = useState('')
-  const [path, setPath] = useState('/')
+  const [path, setPath] = useState(JOINT)
+  const [draft, setDraft] = useState(JOINT)
   const [entries, setEntries] = useState<DirEntry[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const [done, setDone] = useState<string | undefined>(undefined)
+  const [variantsMissing, setVariantsMissing] = useState(0)
+  const pathRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     let live = true
@@ -169,40 +180,84 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
       .then((value) => {
         if (!live) return
         setDistros(value.distros)
+        setLoaded(true)
         const first = value.distros[0]
-        if (first !== undefined) {
-          setDistro(first.name)
-          setPath('/home')
-        }
+        if (first !== undefined) setDistro(first.name)
       })
       .catch((cause: unknown) => {
-        if (live) setError(errorText(cause))
+        if (!live) return
+        setLoaded(true)
+        setError(errorText(cause))
       })
+    // A variant that never published degrades WSL sessions to the host preset,
+    // which reads as "the plugin is ignoring my workspace". Surface it where the
+    // user is already setting a workspace up. Best-effort: an older host half
+    // without `status` must not break the dialog.
+    void call<{ failed: unknown[] }>('status')
+      .then((value) => {
+        if (live && Array.isArray(value.failed)) setVariantsMissing(value.failed.length)
+      })
+      .catch(() => undefined)
     return () => {
       live = false
     }
   }, [])
 
-  const browse = useCallback(
-    async (next: string) => {
+  // Esc closes: the card claims `aria-modal`, so it has to answer the key every
+  // modal answers. Capture phase, because the shell's own handlers sit above
+  // this element. Focus starts in the path field — typing a path is why this
+  // dialog exists, and it keeps the first Tab inside the card.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      props.onClose()
+    }
+    document.addEventListener('keydown', onKey, true)
+    pathRef.current?.focus()
+    pathRef.current?.select()
+    return () => {
+      document.removeEventListener('keydown', onKey, true)
+    }
+    // `props.onClose` is a fresh closure per render; the listener is installed
+    // once per mount, which is the lifetime that matters for a modal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const enter = useCallback(
+    async (raw: string) => {
       if (distro === '') return
+      const typed = raw.trim()
+      // A bare name is relative to the directory being shown, so `mnt/c` from
+      // `/` reaches drvfs without spelling out the absolute path.
+      const resolved = normalizePath(
+        typed === '' ? path : typed.startsWith(JOINT) ? typed : childPath(path, typed),
+      )
       setBusy(true)
       setError(undefined)
       try {
-        const value = await call<{ entries: DirEntry[] }>('listDir', { distro, path: next })
-        setPath(next)
+        // Typed and clicked navigation share this one path: `check` is the only
+        // call that can tell a folder from a file, and it costs ~0.2 ms.
+        const verdict = await call<{ exists: boolean; dir: boolean }>('check', { distro, path: resolved })
+        if (!verdict.exists) throw new Error(t.pathMissing)
+        if (!verdict.dir) throw new Error(t.pathNotFolder)
+        const value = await call<{ entries: DirEntry[] }>('listDir', { distro, path: resolved })
+        setPath(resolved)
+        setDraft(resolved)
         setEntries(value.entries)
+        setDone(undefined)
       } catch (cause) {
         setError(errorText(cause))
       } finally {
         setBusy(false)
       }
     },
-    [distro],
+    [distro, path, t],
   )
 
   useEffect(() => {
-    if (distro !== '') void browse(path)
+    if (distro !== '') void enter('/home')
     // Entering the dialog browses the starting directory once per distro.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [distro])
@@ -225,7 +280,7 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
     } finally {
       setBusy(false)
     }
-  }, [distro, path])
+  }, [distro, path, t])
 
   const crumbs: string[] = []
   for (let cursor = path; ; cursor = parentPath(cursor)) {
@@ -244,60 +299,99 @@ function AddWslDialog(props: { onClose: () => void }): React.ReactElement {
           </button>
         </div>
         <div className="dww-body">
-          <div className="dww-field">
-            <span className="dww-field-label">{t.distribution}</span>
-            <select
-              className="dww-select"
-              value={distro}
-              onChange={(event) => setDistro(event.target.value)}
-            >
-              {distros.map((entry) => (
-                <option key={entry.name} value={entry.name}>
-                  {entry.name}
-                  {entry.default ? t.defaultTag : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="dww-feedback">
-            <div className="dww-breadcrumb">
-              {crumbs.map((crumb, index) => (
-                <button
-                  key={crumb}
-                  type="button"
-                  className="dww-dir-row"
-                  style={{ display: 'inline-flex', height: 'auto', padding: '0 6px', fontSize: 12 }}
-                  onClick={() => void browse(crumb)}
-                  aria-current={index === crumbs.length - 1 ? 'page' : undefined}
+          {loaded && distros.length === 0 ? (
+            <div className="dww-dir-empty">
+              <div>{t.noDistros}</div>
+              <div>{t.noDistrosHint}</div>
+            </div>
+          ) : (
+            <>
+              <div className="dww-field">
+                <span className="dww-field-label">{t.distribution}</span>
+                <select
+                  className="dww-select"
+                  value={distro}
+                  onChange={(event) => setDistro(event.target.value)}
                 >
-                  {crumb === JOINT ? '/' : crumb.slice(crumb.lastIndexOf(JOINT) + 1)}
-                </button>
-              ))}
-            </div>
+                  {distros.map((entry) => (
+                    <option key={entry.name} value={entry.name}>
+                      {entry.name}
+                      {entry.default ? t.defaultTag : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div className="dww-dirlist">
-              {path !== JOINT ? (
-                <button type="button" className="dww-dir-row dww-dir-row--up" onClick={() => void browse(parentPath(path))}>
-                  <span aria-hidden="true">↑</span> ..
-                </button>
-              ) : null}
-              {entries
-                .filter((entry) => entry.dir)
-                .map((entry) => (
+              <div className="dww-field">
+                <span className="dww-field-label">{t.pathLabel}</span>
+                <div className="dww-path">
+                  <input
+                    ref={pathRef}
+                    className="dww-input"
+                    value={draft}
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-label={t.pathLabel}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter') return
+                      event.preventDefault()
+                      void enter(draft)
+                    }}
+                  />
                   <button
-                    key={entry.name}
                     type="button"
-                    className="dww-dir-row"
-                    onClick={() => void browse(childPath(path, entry.name))}
+                    className="dww-btn"
+                    onClick={() => void enter(draft)}
+                    disabled={busy || distro === ''}
                   >
-                    <span aria-hidden="true">{entry.link ? '↪' : '📁'}</span> {entry.name}
+                    {t.go}
                   </button>
-                ))}
-            </div>
-          </div>
+                </div>
+              </div>
 
-          <div className="dww-breadcrumb">{path}</div>
+              <div className="dww-feedback">
+                <div className="dww-breadcrumb">
+                  {crumbs.map((crumb, index) => (
+                    <button
+                      key={crumb}
+                      type="button"
+                      className="dww-dir-row"
+                      style={{ display: 'inline-flex', height: 'auto', padding: '0 6px', fontSize: 12 }}
+                      onClick={() => void enter(crumb)}
+                      aria-current={index === crumbs.length - 1 ? 'page' : undefined}
+                    >
+                      {crumb === JOINT ? '/' : crumb.slice(crumb.lastIndexOf(JOINT) + 1)}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="dww-dirlist">
+                  {path !== JOINT ? (
+                    <button type="button" className="dww-dir-row dww-dir-row--up" onClick={() => void enter(parentPath(path))}>
+                      <span aria-hidden="true">↑</span> ..
+                    </button>
+                  ) : null}
+                  {entries
+                    .filter((entry) => entry.dir)
+                    .map((entry) => (
+                      <button
+                        key={entry.name}
+                        type="button"
+                        className="dww-dir-row"
+                        onClick={() => void enter(childPath(path, entry.name))}
+                      >
+                        <span aria-hidden="true">{entry.link ? '↪' : '📁'}</span> {entry.name}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {variantsMissing === 0 ? null : (
+            <div className="dww-warn">{fill(t.variantsMissing, { count: String(variantsMissing) })}</div>
+          )}
           {error === undefined ? null : <div className="dww-error">{error}</div>}
           {done === undefined ? null : <div className="dww-done">{done}</div>}
         </div>

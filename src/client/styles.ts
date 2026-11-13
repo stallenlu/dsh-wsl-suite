@@ -176,6 +176,9 @@ const STYLES = `
   color: var(--dsb-text);
   font-size: 13px;
 }
+/* The path field and its Go button: typing is the shortcut to /mnt/<drive>
+   and to any depth the browse list would take six clicks to reach. */
+.dww-path { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dww-input {
   box-sizing: border-box;
   flex: 1;
@@ -186,6 +189,7 @@ const STYLES = `
   border-radius: var(--dsb-radius-sm);
   background: var(--dsb-surface-3);
   color: var(--dsb-text);
+  font-family: var(--dsb-font-mono);
   font-size: 13px;
 }
 /* Focus is an accent, not a surface change: blue is the baseline's "active"
@@ -271,6 +275,19 @@ const STYLES = `
   border-radius: var(--dsb-radius-sm);
   background: var(--dsb-wash-stability);
   color: var(--dsb-accent-stability);
+  font-size: 12px;
+  line-height: 18px;
+}
+/* Degraded, not broken: a variant that never published still leaves a working
+   dialog and a working workspace, so this is the warn accent, not the error. */
+.dww-warn {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--dsb-accent-warn) 45%, transparent);
+  border-radius: var(--dsb-radius-sm);
+  background: var(--dsb-wash-warn);
+  color: var(--dsb-accent-warn);
   font-size: 12px;
   line-height: 18px;
 }

@@ -11,7 +11,7 @@ DeepSeek Harness 的 WSL 工作区插件。对
 
 | | |
 | --- | --- |
-| 版本 | 0.1.8 |
+| 版本 | 0.1.9 |
 | 宿主 | DeepSeek Harness `0.2.1-rc.5`（桌面版与 Web 版） |
 | Node | `>= 22` |
 | 发行版 | 任意 WSL2 发行版（在 Ubuntu 26.04 上测试） |
@@ -72,7 +72,9 @@ dsh-wsl 的问题请在本仓库提 issue；`dsh-wsl-workspace` 本身的问题�
   的发行版并浏览 Linux 文件系统；「添加此文件夹」通过宿主自己的工作区
   注册表登记——WSL 工作区只是路径为 UNC（
   `\\wsl.localhost\Ubuntu\home\you\…`）的宿主工作区，只有这一条记录，
-  没有会漂移的私有存储。
+  没有会漂移的私有存储。路径框也可以直接输入：敲入
+  `/mnt/c/Users/you/projects` 回车，或输入相对当前目录的短名。深目录不该靠
+  一层层点进去。
 - **侧栏终端跟着会话进发行版。** 工作区是 WSL 路径的会话，其终端*在发行版
   内*打开——真正的 bash 配真正的 pty（输入、输出、resize 全部回环）。
   Windows cwd 的会话原样不动。
@@ -80,8 +82,25 @@ dsh-wsl 的问题请在本仓库提 issue；`dsh-wsl-workspace` 本身的问题�
   （`standard` → `wsl-standard`），把 shell/fs 工具换成 WSL 版，并新增跑
   发行版自带 ripgrep 的 `grep`/`glob`——覆盖 `/mnt/<盘符>`，对不可读目录
   宽容（exit 2 保留部分结果而不是让整次调用失败）。
+- **出问题会说明白。** 发行版里找不到可用的 `node` 时，提示会讲清查的是哪条
+  非登录 shell 的 PATH、以及怎么修（nvm/fnm/volta 用户：登录 shell 会掩盖
+  这件事，agent 拿不到那个环境）；机器上一个发行版都没有时直接说明，而不是
+  给一个空下拉框；某个预设孪生没生成成功时在弹窗里点出来，否则症状只会是
+  「WSL 新会话悄悄用了宿主默认预设」。
 - **已本地化。** 弹窗跟随 `navigator.language`：`zh-*` 显示简体中文，
   其余英文。
+
+## 配置
+
+两个可选字段：
+
+| 字段 | 默认 | 含义 |
+| --- | --- | --- |
+| `nodePath` | `node` | 启动发行版内 agent 的可执行文件。按**非登录** PATH 解析，这也正是 `wsl.exe --exec` 拿到的环境——nvm/fnm/volta 的安装在它之外，所以要钉绝对路径。 |
+| `defaultPreset` | `wsl-standard` | WSL 新会话默认进入的孪生变体。空字符串表示沿用宿主默认。 |
+
+浏览器路由**刻意不可配置**：客户端 bundle 是预构建的，读不到宿主 config，
+可配置的端点只会产出一个「调用没人注册的路径」的弹窗。
 
 ## 目录里有什么
 
@@ -208,7 +227,7 @@ remove/reinstall 流程。
 `dsh-wsl-suite.tgz`（无需构建，因此跳过 `allowBuilds` 授权）：
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.8/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.9/dsh-wsl-suite.tgz
 ```
 
 资产名不含版本号、URL 钉死在 tag 上，后续发版不会让链接失效。
@@ -258,7 +277,7 @@ curl -X POST http://127.0.0.1:<gui-port>/dsh-wsl/api \\
 npm install          # devDependencies 钉住 0.2.1-rc.5 宿主接口
 npm run typecheck    # 还需 @deepseek-ai/dsh-llm（已钉在 devDependencies）
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 73 项检查；live 的在没有发行版时跳过而非失败
+npm test             # 75 项检查；live 的在没有发行版时跳过而非失败
 npm run verify       # 类型检查，然后 build + test
 ```
 
