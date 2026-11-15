@@ -197,6 +197,25 @@ test('a background run that fails unobserved never kills the process', { skip },
 })
 
 /**
+ * `close()` ends stdin, but the agent's exit arrives asynchronously. A caller
+ * that asks for a channel in that window must get a live one, not the pipe it
+ * just closed — and a request already waiting on it must be told, rather than
+ * waiting for a reply that will never come.
+ */
+test('a closed channel is retired at once, not at exit', { skip }, async () => {
+  const first = await channelFor(distro!)
+  const inFlight = first.call({ op: 'ping' })
+  first.close()
+  assert.equal(first.closed, true, 'close() retires the channel synchronously')
+  await assert.rejects(inFlight, /closed/, 'a waiting request is told, not stranded')
+
+  const second = await channelFor(distro!)
+  assert.notEqual(second, first, 'the registry hands out a fresh channel')
+  assert.equal(second.closed, false)
+  assert.equal((await second.ok({ op: 'ping' })).ok, true)
+})
+
+/**
  * A long run only arms the idle timer once — at `begin()`. If "idle" meant "no
  * request started recently", the channel would close under a 30-minute `pytest`
  * or a dev server while the user merely read code, and the agent kills its

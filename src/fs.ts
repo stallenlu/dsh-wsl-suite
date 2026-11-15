@@ -233,8 +233,13 @@ export class WslFileSystem extends FileSystem {
     try {
       const real = (await channel.ok({ op: 'realpath', p: parent }, signal)).path!
       return real === '/' ? `/${name}` : `${real}/${name}`
-    } catch {
-      return path
+    } catch (error) {
+      // Only "the parent is missing too" means the path has no canonical form
+      // yet, and the un-normalized spelling is the best answer there. An abort
+      // or a dead channel is not that: swallowing it would hand back a target
+      // that a later call cannot recognize, and would hide the cancellation.
+      if (error instanceof ChannelError && error.code === 'ENOENT') return path
+      throw asFsError(error, toUnc(channel.distro, path))
     }
   }
 

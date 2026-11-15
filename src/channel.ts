@@ -203,20 +203,29 @@ export class Channel {
       waiter.resolve(reply)
     })
 
-    const die = (reason: string) => {
-      if (this.#closed) return
-      this.#closed = true
-      this.#exitError = new ChannelError(`agent in ${this.distro} closed: ${reason}`, CODE.channelClosed)
-      clearTimeout(this.#idleTimer)
-      for (const waiter of this.#pending.values()) {
-        waiter.reject(this.#exitError)
-      }
-      this.#pending.clear()
-    }
+    const die = (reason: string) => this.#die(`agent in ${this.distro} closed: ${reason}`)
 
     this.#child.on('exit', (code, signal) => die(signal ?? `exit ${code ?? 'unknown'}`))
     this.#child.on('error', (error) => die(String(error)))
     this.#child.stdin.on('error', (error) => die(String(error)))
+  }
+
+  /**
+   * Retire the channel: mark it closed and fail everything still waiting.
+   *
+   * `close()` routes here too. Ending stdin makes the agent exit, but the exit
+   * arrives asynchronously — a caller that asks for a channel in that window
+   * would otherwise be handed a pipe whose writes go nowhere, and a pending
+   * request would wait for a reply the agent never sends.
+   * @param reason - what the pending callers are told.
+   */
+  #die(reason: string): void {
+    if (this.#closed) return
+    this.#closed = true
+    this.#exitError = new ChannelError(reason, CODE.channelClosed)
+    clearTimeout(this.#idleTimer)
+    for (const waiter of this.#pending.values()) waiter.reject(this.#exitError)
+    this.#pending.clear()
   }
 
   /** True once the channel can no longer serve requests. */
@@ -325,7 +334,9 @@ export class Channel {
   /** Close the pipe and wait for the process to exit. Idempotent. */
   close(): void {
     if (this.#closed) return
-    clearTimeout(this.#idleTimer)
+    // Mark it dead first: the exit event is asynchronous, and a request started
+    // in the meantime must be refused rather than written into a closed pipe.
+    this.#die(`agent in ${this.distro} closed: channel closed`)
     try {
       this.#child.stdin.end()
     } catch {

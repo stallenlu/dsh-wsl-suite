@@ -129,6 +129,15 @@ export function mountHeaderEntry(home: HTMLElement | null, options: HostEntryOpt
     onSeat(value)
   }
   const ensure = (): void => {
+    // Steady state: the seat is still where it was put. Only the drawn facts can
+    // have changed (a locale switch, a rebind), and `draw` is a no-op unless they
+    // did — so skip the upward discovery walk that the body observer would
+    // otherwise repeat on every mutation of the page, including the ones a
+    // streaming answer produces.
+    if (drawn !== null && slot.isConnected && observed !== null && slot.parentElement === observed) {
+      draw(drawn.className, options.label())
+      return
+    }
     const found = find()
     if (found === null) {
       slot.remove()
