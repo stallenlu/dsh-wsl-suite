@@ -13,7 +13,7 @@ import { after, test } from 'node:test'
 import type { Context } from '@deepseek-ai/cordis'
 import { closeAll } from '../src/channel.ts'
 import { decodeWslOut } from '../src/index.ts'
-import { apply, linuxTarget, resolveTarget, shq } from '../src/search.ts'
+import { apply, collect, linuxTarget, resolveTarget, shq } from '../src/search.ts'
 
 /** The distro names this machine has, decoded the way `wsl.exe` writes them. */
 function distros(): string[] {
@@ -67,6 +67,12 @@ function tools(config?: { distro?: string }): Map<string, Tool> {
         }
       }
       return undefined
+    },
+    // cordis's wait-for-service hook: the plugin asks for `tools` (and, inside
+    // that, `systemPrompt`) instead of sampling them once, so the stub resolves
+    // every dependency immediately against the same fake context.
+    inject(_deps: string[], body: (scope: unknown) => void) {
+      body(ctx)
     },
     effect(body: () => () => void) {
       body()
@@ -226,6 +232,77 @@ test('glob lists files, never directories, and honours the pattern', { skip }, a
 
   const rendered = registry.get('glob')!.output.render({}, { ...result, paths: [], total: 0 })
   assert.equal(rendered[0]!.text, 'No files matched.')
+})
+
+test('the collector stops at its byte budget and stays stopped', () => {
+  // The one unbounded buffer in the plugin used to be ripgrep's stdout: a
+  // pattern like `.` over a large tree streams every matching line into a single
+  // host string. These cases pin the budget itself, not the channel.
+  const limit = 10
+  const first = collect({ text: '', truncated: false }, 'abcdef', limit)
+  assert.deepEqual(first, { text: 'abcdef', truncated: false })
+
+  // Exactly at the limit is still complete: no byte was dropped.
+  const exact = collect(first, 'ghij', limit)
+  assert.deepEqual(exact, { text: 'abcdefghij', truncated: false })
+
+  // One byte over: keep the head, report the cut.
+  const over = collect(exact, 'k', limit)
+  assert.deepEqual(over, { text: 'abcdefghij', truncated: true })
+
+  // Once truncated, later chunks are ignored instead of silently re-opening the
+  // buffer — the run is being killed at this point.
+  assert.deepEqual(collect(over, 'lmnop', limit), { text: 'abcdefghij', truncated: true })
+
+  // An oversized FIRST chunk keeps only what fits.
+  assert.deepEqual(collect({ text: '', truncated: false }, 'abcdefghijklm', limit), {
+    text: 'abcdefghij',
+    truncated: true,
+  })
+
+  // An empty chunk is a no-op and must not latch truncation.
+  assert.deepEqual(collect({ text: 'ab', truncated: false }, '', limit), {
+    text: 'ab',
+    truncated: false,
+  })
+})
+
+test('a service that arrives after activation still gets the tools', () => {
+  // The plugin used to sample `tools` once at activation. `tools` is provided by
+  // a sibling plugin, so an activation that ran first left both tools
+  // unregistered for the whole session — a WSL world with no `grep` or `glob`.
+  // The fix is to WAIT for the service, which this stub models by holding the
+  // inject callback until the service is published.
+  const registered: string[] = []
+  const pending: ((scope: unknown) => void)[] = []
+  const services = new Map<string, unknown>()
+  const ctx = {
+    get: (name: string) => services.get(name),
+    inject(deps: string[], body: (scope: unknown) => void) {
+      // A real cordis fiber runs the callback now when every dependency is
+      // already there, and on provision otherwise.
+      if (deps.every((dep) => services.has(dep))) body(ctx)
+      else pending.push(body)
+    },
+    effect(body: () => () => void) {
+      body()
+    },
+  } as unknown as Context
+
+  apply(ctx)
+  // Nothing is registered yet — and, crucially, nothing was skipped either.
+  assert.deepEqual(registered, [])
+  assert.equal(pending.length, 1)
+
+  services.set('tools', {
+    register(definition: Tool) {
+      registered.push(definition.name)
+      return () => {}
+    },
+  })
+  for (const body of pending.splice(0)) body(ctx)
+
+  assert.deepEqual(registered.sort(), ['glob', 'grep'])
 })
 
 test('a search actually runs inside the distribution', { skip }, async () => {

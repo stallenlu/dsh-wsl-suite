@@ -44,7 +44,7 @@ import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ChannelError, channelFor, closeAll } from './channel.ts'
 import { clearHostGate, isWslVariantId, parseRows, transformVariant, variantIdFor } from './host/variants.ts'
-import { parseUnc, resolveAddress, toUnc } from './paths.ts'
+import { parseUnc, resolveAddress, toPosix, toUnc } from './paths.ts'
 import { wslWorldGroup, type Row } from './rows.ts'
 import { applyDefaultPreset, type VariantCatalog } from './defaultPreset.ts'
 import { applyTerminal } from './terminal.ts'
@@ -96,7 +96,12 @@ const MNT_ROOT = '/mnt'
  * the registry is asked — and it is a string test, so it needs no I/O.
  */
 export function workspacePathProblem(path: string): string | undefined {
-  if (path !== MNT_ROOT && !path.startsWith(`${MNT_ROOT}/`)) return undefined
+  // Normalise BEFORE the prefix test. `toUnc` later resolves the path through
+  // the registry, so a path spelled `//mnt/c`, `/./mnt/c` or `/home/../mnt/c`
+  // still lands on the same drvfs mount — a raw `startsWith` let all three
+  // through and answered the EPERM this guard exists to replace.
+  const normalized = toPosix(path)
+  if (normalized !== MNT_ROOT && !normalized.startsWith(`${MNT_ROOT}/`)) return undefined
   return (
     `${path} is under ${MNT_ROOT}, which Windows cannot resolve, so the host cannot register it as a workspace. ` +
     'Keep the project on the distribution filesystem (for example /home/you/projects), or open a Windows workspace at the drive path instead.'
@@ -272,6 +277,23 @@ function hostOf(req: IncomingMessage): string {
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const address = (req.socket.remoteAddress ?? '').toLowerCase()
   return LOOPBACK.has(address) && LOOPBACK.has(hostOf(req))
+}
+
+/**
+ * Whether the request carries a JSON content type.
+ *
+ * This is a CSRF gate, not a parser rule: the loopback test above passes for any
+ * request a browser makes from a page the user visits, because the browser is
+ * the one connecting. What a foreign page CANNOT do is send this content type
+ * without a CORS preflight — `application/json` is not a simple-request type —
+ * and this route answers no preflight, so requiring it blocks the cross-site
+ * call while leaving the plugin's own `fetch` untouched. `text/plain` used to
+ * reach `listDir` and `createWorkspace` from any origin.
+ */
+export function isJsonRequest(req: IncomingMessage): boolean {
+  const header = req.headers['content-type']
+  if (typeof header !== 'string') return false
+  return header.split(';')[0]!.trim().toLowerCase() === 'application/json'
 }
 
 async function readBody(req: IncomingMessage): Promise<string> {
@@ -527,6 +549,12 @@ export function apply(ctx: Context, config: Config): void {
           json(res, 403, { ok: false, error: 'loopback only' })
           return
         }
+        if (!isJsonRequest(req)) {
+          // A browser cannot send this header cross-origin without a preflight
+          // this route never answers, so the rejection is the CSRF defence.
+          json(res, 415, { ok: false, error: 'content-type must be application/json' })
+          return
+        }
         let body: Record<string, unknown>
         try {
           body = JSON.parse(await readBody(req)) as Record<string, unknown>
@@ -548,9 +576,16 @@ export function apply(ctx: Context, config: Config): void {
   // this live set to know whether the configured default preset exists yet.
   const catalog: VariantCatalog = { ids: new Set<string>() }
 
-  const presets = ctx.get('agentPresets') as unknown as PresetsService | undefined
-  if (presets !== undefined && typeof presets.readDocument === 'function') {
-    ctx.effect(() => {
+  // `ctx.inject` waits for the service instead of sampling it once. Sampling was
+  // a real failure mode: the preset registry is provided by a sibling plugin, so
+  // an activation that ran before it was ready left `presets` undefined and the
+  // whole variant pass skipped — every WSL session then silently fell back to the
+  // host's `standard`, with nothing in the UI to say so. The same shape applies
+  // to every service below.
+  ctx.inject(['agentPresets'], (scope: Context) => {
+    const presets = scope.get('agentPresets') as unknown as PresetsService | undefined
+    if (presets === undefined || typeof presets.readDocument !== 'function') return
+    scope.effect(() => {
       void materialize(ctx, presets, config.nodePath)
         .then((outcome) => {
           state.produced = outcome.produced
@@ -571,11 +606,12 @@ export function apply(ctx: Context, config: Config): void {
         })
       return () => {}
     }, 'dsh-wsl: preset variants')
-  }
+  })
 
-  const shellEnv = ctx.get('shellEnv') as unknown as ShellEnvService | undefined
-  if (shellEnv !== undefined && typeof shellEnv.register === 'function') {
-    ctx.effect(
+  ctx.inject(['shellEnv'], (scope: Context) => {
+    const shellEnv = scope.get('shellEnv') as unknown as ShellEnvService | undefined
+    if (shellEnv === undefined || typeof shellEnv.register !== 'function') return
+    scope.effect(
       () =>
         shellEnv.register({
           name: 'dsh-wsl',
@@ -593,7 +629,7 @@ export function apply(ctx: Context, config: Config): void {
         }),
       'dsh-wsl: DSH_WSL_DISTRO',
     )
-  }
+  })
 
   applyTerminal(ctx)
 

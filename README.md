@@ -10,7 +10,7 @@ reached over a JSON-lines pipe, instead of a 9P file share plus a spawn per comm
 
 | | |
 | --- | --- |
-| Version | 0.1.10 |
+| Version | 0.1.11 |
 | Harness | DeepSeek Harness `0.2.1-rc.5` (desktop & web) |
 | Node | `>= 22` |
 | Distro | any WSL2 distro (tested on Ubuntu 26.04) |
@@ -114,6 +114,14 @@ The browser route is deliberately **not** configurable: the client bundle is
 prebuilt and cannot read the host's config, so a configurable endpoint would only
 produce a dialog that called a route nobody registered.
 
+The route accepts loopback requests only, and it requires
+`content-type: application/json`. The second check is what keeps the route
+private: the loopback test passes for anything a page in your browser sends,
+because the browser is the client, and a `text/plain` body is a CORS *simple
+request* — no preflight, so any site you visit could otherwise list a
+distribution or register a workspace. `application/json` cannot be sent
+cross-origin without a preflight this route never answers.
+
 ## What is in here
 
 | file | role |
@@ -122,7 +130,7 @@ produce a dialog that called a route nobody registered.
 | `src/channel.ts` | host side of that pipe: spawns the agent, pairs replies by id, idles closed after 10 minutes (idle = no request outstanding, so a 30-minute test run is never killed), one channel per distro, reopen-on-death. |
 | `src/shell.ts` | `WslShellExecutor extends ShellExecutor` — exit codes, stream split, live streaming, timeout that kills the process group, tail-preserving output cap, background handles whose unobserved rejection can never kill the host. |
 | `src/fs.ts` | `WslFileSystem extends FileSystem` — 12 primitives, version-guarded writes, `FS_STALE_VERSION`/`FS_AMBIGUOUS_EDIT`/`FS_NOT_TEXT` handling, sandbox fencing, atomic write by rename, and **byte-faithful CRLF**: the seam's LF normalization applies to the reported `before`/`after` only, never to the bytes on disk. |
-| `src/search.ts` | the `grep` and `glob` tools, running ripgrep **inside** the distribution. |
+| `src/search.ts` | the `grep` and `glob` tools, running ripgrep **inside** the distribution, with a 4 MB ceiling on the output one run may buffer. |
 | `src/terminal.ts` | makes the sidebar terminal follow a WSL session in: wraps the host's single `subprocess.spawnTerminal` so a UNC cwd launches `wsl.exe -d <distro> --cd <linux> -- <shell>`. |
 | `src/client/index.tsx` | browser half: the **W** header entry (via `src/client/hostEntry.ts`) with the bottom-list entry as fallback + discovery anchor; the add-workspace dialog (`src/client/styles.ts` styles it, `src/client/locale.ts` carries the zh/en strings). |
 | `src/client/baseline.ts` | the house design baseline (`dsh-design-baseline` v1.1.0), vendored: six accent colours, neutral surfaces mapped from the host's `--dsw-alias-*`. A client bundle cannot `require` a file path, so it is inlined rather than imported. |
@@ -268,7 +276,7 @@ push — no `file:`-style remove/reinstall dance.
 `dsh-wsl-suite.tgz` (no build step, so it skips the `allowBuilds` approval):
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.10/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.11/dsh-wsl-suite.tgz
 ```
 
 The asset name carries no version number and the URL is pinned to a tag, so the
@@ -295,7 +303,7 @@ C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 Because the installed copy is a copy, every source change needs a reinstall; from a
 DeepSeek Harness session:
 
-1. `npm run verify` in the source tree (typecheck + build + 76 checks).
+1. `npm run verify` in the source tree (typecheck + build + 81 checks).
 2. `plugin_manager remove_bundle target=dsh-wsl-suite`, then
    `plugin_manager install_bundle target=file:E:\DshConfig\dsh-wsl-suite`.
 3. Restart DSH (the reinstall answers `application: "restart-required"`).
@@ -322,7 +330,7 @@ entries proves the whole pipe.
 npm install          # devDependencies pin the 0.2.1-rc.5 host surface
 npm run typecheck    # also needs @deepseek-ai/dsh-llm (pinned in devDependencies)
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 76 checks; live ones skip when no distro is present
+npm test             # 81 checks; live ones skip when no distro is present
 npm run verify       # typecheck, then build + test
 ```
 

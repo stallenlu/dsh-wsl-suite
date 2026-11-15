@@ -11,7 +11,7 @@ DeepSeek Harness 的 WSL 工作区插件。对
 
 | | |
 | --- | --- |
-| 版本 | 0.1.10 |
+| 版本 | 0.1.11 |
 | 宿主 | DeepSeek Harness `0.2.1-rc.5`（桌面版与 Web 版） |
 | Node | `>= 22` |
 | 发行版 | 任意 WSL2 发行版（在 Ubuntu 26.04 上测试） |
@@ -106,6 +106,12 @@ dsh-wsl 的问题请在本仓库提 issue；`dsh-wsl-workspace` 本身的问题�
 浏览器路由**刻意不可配置**：客户端 bundle 是预构建的，读不到宿主 config，
 可配置的端点只会产出一个「调用没人注册的路径」的弹窗。
 
+路由只接受回环请求，并且要求 `content-type: application/json`。第二道检查才是
+真正把关的：回环校验对浏览器里任何页面发出的请求都成立（客户端就是浏览器），
+而 `text/plain` 属于 CORS 的**简单请求**——不触发预检，于是你访问的任何站点都
+能列出发行版目录、注册工作区。`application/json` 无法在不触发预检的情况下跨站
+发出，而这条路由不应答预检。
+
 ## 目录里有什么
 
 | 文件 | 职责 |
@@ -114,7 +120,7 @@ dsh-wsl 的问题请在本仓库提 issue；`dsh-wsl-workspace` 本身的问题�
 | `src/channel.ts` | 管道的宿主侧：拉起 agent、按 id 配对回复、10 分钟空闲即关（空闲 = 无未完成请求，30 分钟的测试跑不会被杀）、每个发行版一条通道、死后重开。 |
 | `src/shell.ts` | `WslShellExecutor extends ShellExecutor`——退出码、流分离、实时流、杀进程组的超时、保尾输出上限、后台句柄（其未观察的 rejection 永远不会杀死宿主）。 |
 | `src/fs.ts` | `WslFileSystem extends FileSystem`——12 个原语、版本守卫写入、`FS_STALE_VERSION`/`FS_AMBIGUOUS_EDIT`/`FS_NOT_TEXT` 处理、沙盒围栏、rename 原子写，以及**逐字节保真的 CRLF**：接缝的 LF 归一化只作用于上报的 `before`/`after`，永不动磁盘字节。 |
-| `src/search.ts` | `grep` 和 `glob` 工具，ripgrep 在发行版**内**执行。 |
+| `src/search.ts` | `grep` 和 `glob` 工具，ripgrep 在发行版**内**执行；单次运行的输出缓冲上限 4 MB。 |
 | `src/terminal.ts` | 让侧栏终端跟着 WSL 会话进去：包装宿主唯一的 `subprocess.spawnTerminal`，UNC cwd 改写为 `wsl.exe -d <distro> --cd <linux> -- <shell>`。 |
 | `src/client/index.tsx` | 浏览器半边：**W** 标题栏入口（经 `src/client/hostEntry.ts`），底部列表入口作回退兼发现锚点；添加工作区弹窗（`src/client/styles.ts` 负责样式，`src/client/locale.ts` 放中英文字符串）。 |
 | `src/client/baseline.ts` | 设计基线（`dsh-design-baseline` v1.1.0）的 vendored 副本：六个 accent 色，中性色面映射自宿主的 `--dsw-alias-*`。client bundle 无法 `require` 文件路径，所以是内联而非 import。 |
@@ -237,7 +243,7 @@ remove/reinstall 流程。
 `dsh-wsl-suite.tgz`（无需构建，因此跳过 `allowBuilds` 授权）：
 
 ```sh
-pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.10/dsh-wsl-suite.tgz
+pnpm add https://github.com/stallenlu/dsh-wsl-suite/releases/download/v0.1.11/dsh-wsl-suite.tgz
 ```
 
 资产名不含版本号、URL 钉死在 tag 上，后续发版不会让链接失效。
@@ -260,7 +266,7 @@ C:\Users\GT14\.dsh\profiles\desktop\node_modules\dsh-wsl-suite\
 
 因为安装副本是复制，每处源码改动都要重装；在 DeepSeek Harness 会话里：
 
-1. 源码树里 `npm run verify`（类型检查 + 构建 + 76 项检查）。
+1. 源码树里 `npm run verify`（类型检查 + 构建 + 81 项检查）。
 2. `plugin_manager remove_bundle target=dsh-wsl-suite`，然后
    `plugin_manager install_bundle target=file:E:\DshConfig\dsh-wsl-suite`。
 3. 重启 DSH（重装返回 `application: "restart-required"`）。
@@ -287,7 +293,7 @@ curl -X POST http://127.0.0.1:<gui-port>/dsh-wsl/api \\
 npm install          # devDependencies 钉住 0.2.1-rc.5 宿主接口
 npm run typecheck    # 还需 @deepseek-ai/dsh-llm（已钉在 devDependencies）
 npm run build        # lib/{index,fs,shell,search,client}.js + paths-*.js
-npm test             # 76 项检查；live 的在没有发行版时跳过而非失败
+npm test             # 81 项检查；live 的在没有发行版时跳过而非失败
 npm run verify       # 类型检查，然后 build + test
 ```
 

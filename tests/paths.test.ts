@@ -59,3 +59,20 @@ test('a workspace path is refused under /mnt, and only there', () => {
   // test that forgot the separator.
   assert.equal(workspacePathProblem('/mnt-projects/x'), undefined)
 })
+
+test('a drvfs path spelled another way is still refused', () => {
+  // The guard is a string test in front of the registry's `realpath`, so a
+  // spelling that reaches the same mount point has to be caught too. These
+  // three used to slip through a raw `startsWith('/mnt/')` and the caller saw
+  // the bare `EPERM ... realpath` the guard exists to replace.
+  for (const spelling of ['//mnt/c', '/./mnt/c', '/home/../mnt/c', '/mnt/c/../d']) {
+    assert.match(
+      workspacePathProblem(spelling) ?? '',
+      /\/mnt/,
+      `${spelling} must be refused as drvfs`,
+    )
+  }
+  // Normalisation must not invent a refusal: these resolve elsewhere.
+  assert.equal(workspacePathProblem('/home/../home/u'), undefined)
+  assert.equal(workspacePathProblem('/mnt-projects/../home/u'), undefined)
+})

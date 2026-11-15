@@ -50,8 +50,42 @@ const MAX_MATCHES = 250
 /** Paths kept inline by one `glob` call. */
 const MAX_PATHS = 100
 
+/** One run's collected stdout, and whether the budget cut it short. */
+export interface Collected {
+  text: string
+  truncated: boolean
+}
+
+/**
+ * Append one stdout chunk within `limit`.
+ *
+ * Split out from the collector callback so the budget is testable without a
+ * live channel: it is the only place that decides how much of a runaway
+ * ripgrep output may reach the host process.
+ * @param state - what has been collected so far.
+ * @param chunk - the next piece of stdout.
+ * @param limit - the byte budget for the whole run.
+ * @returns the new state; `truncated` latches on the first overrun.
+ */
+export function collect(state: Collected, chunk: string, limit: number): Collected {
+  if (state.truncated || chunk === '') return state
+  const room = limit - state.text.length
+  if (chunk.length <= room) return { text: state.text + chunk, truncated: false }
+  return { text: state.text + chunk.slice(0, Math.max(0, room)), truncated: true }
+}
+
 /** Longest matched line kept, in characters. */
 const MAX_LINE = 2_000
+
+/**
+ * Largest stdout this module buffers from one ripgrep run.
+ *
+ * The match and path caps are far smaller, so this only bounds the collector:
+ * a broad pattern over a large tree would otherwise stream every matching line
+ * into one string in the host process. Reaching it stops the run and reports the
+ * head as truncated rather than pretending the answer was complete.
+ */
+const MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 
 /** Wall-clock budget for one search. */
 const TIMEOUT_MS = 120_000
@@ -200,8 +234,6 @@ function renderMatches(matches: GrepMatch[], total: number): ContentBlock[] {
  * @param config - the world's pinned distribution and agent executable, when configured.
  */
 export function apply(ctx: Context, config?: { distro?: string; nodePath?: string }): void {
-  const tools = ctx.get('tools') as unknown as ToolsFace | undefined
-  if (tools === undefined) return
   const pinned = config?.distro
   const nodePath = config?.nodePath ?? 'node'
 
@@ -228,26 +260,45 @@ export function apply(ctx: Context, config?: { distro?: string; nodePath?: strin
    * search at all, so results are kept and only a run with nothing to show is
    * reported as an error, carrying ripgrep's own reason.
    */
-  const run = async (target: Target, command: string, signal: AbortSignal): Promise<string> => {
+  const run = async (
+    target: Target,
+    command: string,
+    signal: AbortSignal,
+  ): Promise<{ text: string; truncated: boolean }> => {
     const channel = await channelFor(target.distro, nodePath)
-    let stdout = ''
+    let out: Collected = { text: '', truncated: false }
     let stderr = ''
-    const { reply } = channel.begin(
+    const { id, reply } = channel.begin(
       { op: 'exec', cmd: command, cwd: target.cwd, timeout: TIMEOUT_MS },
       signal,
       0,
       (stream, text) => {
-        if (stream === 'o') stdout += text
-        else stderr += text
+        if (stream !== 'o') {
+          // Diagnostics are small; keep only enough to quote a reason.
+          if (stderr.length < MAX_LINE) stderr += text
+          return
+        }
+        // A pattern like `.` over a large tree can match millions of lines, and
+        // every byte of ripgrep's stdout used to land in this string — the one
+        // unbounded buffer in the plugin. Stop at the budget and kill the run:
+        // the caller keeps the head, which is what it reports anyway (the match
+        // and path caps are far smaller).
+        const next = collect(out, text, MAX_OUTPUT_BYTES)
+        const justCut = next.truncated && !out.truncated
+        out = next
+        if (justCut) void channel.call({ op: 'kill', target: id }).catch(() => undefined)
       },
     )
     const final = await reply
+    // A killed run reports as a signal, not a normal exit; the head is still the
+    // answer the caller asked for, so truncation outranks the exit facts.
+    if (out.truncated) return out
     if (!final.ok) throw new Error(final.message ?? 'search failed')
     // A killed search is a failure, not an empty result: reporting "no matches"
     // would tell the model a question was answered when it was not.
     if (final.timedOut) throw new Error(`search timed out after ${TIMEOUT_MS} ms`)
-    if (final.code_ === 0 || final.code_ === 1) return stdout
-    if (stdout.trim() !== '') return stdout
+    if (final.code_ === 0 || final.code_ === 1) return out
+    if (out.text.trim() !== '') return out
     const reason = stderr.trim().split('\n').slice(0, 3).join('; ')
     throw new Error(
       `ripgrep exited ${final.code_ ?? 'on a signal'}${reason === '' ? '' : `: ${reason}`}`,
@@ -308,9 +359,9 @@ export function apply(ctx: Context, config?: { distro?: string; nodePath?: strin
       const parts = ['rg', '--json', `--regexp=${shq(args.pattern)}`]
       if (args.include !== undefined) parts.push(`--glob=${shq(args.include)}`)
       parts.push('--', shq(linuxTarget(args.path)))
-      const stdout = await run(target, parts.join(' '), exec.signal)
+      const output = await run(target, parts.join(' '), exec.signal)
       const all: GrepMatch[] = []
-      for (const line of stdout.split('\n')) {
+      for (const line of output.text.split('\n')) {
         if (line === '') continue
         const match = matchOf(line)
         if (match) all.push(match)
@@ -381,24 +432,33 @@ export function apply(ctx: Context, config?: { distro?: string; nodePath?: strin
         '--',
         shq(root),
       ].join(' ')
-      const stdout = await run(target, command, exec.signal)
-      const all = stdout.split('\n').filter((line) => line !== '')
+      const output = await run(target, command, exec.signal)
+      const all = output.text.split('\n').filter((line) => line !== '')
       return { root, paths: all.slice(0, MAX_PATHS), total: all.length }
     },
   })
 
-  ctx.effect(() => tools.register(grep), 'dsh-wsl: grep tool')
-  ctx.effect(() => tools.register(glob), 'dsh-wsl: glob tool')
+  // `ctx.inject` waits for the registry rather than sampling it once. Sampling
+  // was a real failure mode: `tools` is provided by a sibling plugin, so an
+  // activation that ran first left both tools unregistered for the whole
+  // session — a WSL world that silently had no `grep`/`glob` at all.
+  ctx.inject(['tools'], (scope: Context) => {
+    const tools = scope.get('tools') as unknown as ToolsFace | undefined
+    if (tools === undefined) return
+    scope.effect(() => tools.register(grep), 'dsh-wsl: grep tool')
+    scope.effect(() => tools.register(glob), 'dsh-wsl: glob tool')
 
-  // Without the tool the guidance is noise, so it is gated on the registration.
-  const prompts = ctx.get('systemPrompt') as unknown as
-    | { section(section: unknown): () => void; getSectionOrder(name: string): number }
-    | undefined
-  if (prompts) {
-    prompts.section({
-      name: 'tool:grep',
-      order: prompts.getSectionOrder('TOOL_GREP'),
-      text: 'Use the grep and glob tools — not shell grep, rg, or find — to search files inside WSL.',
+    // Without the tool the guidance is noise, so it is gated on the registration.
+    ctx.inject(['systemPrompt'], (promptScope: Context) => {
+      const prompts = promptScope.get('systemPrompt') as unknown as
+        | { section(section: unknown): () => void; getSectionOrder(name: string): number }
+        | undefined
+      if (prompts === undefined) return
+      prompts.section({
+        name: 'tool:grep',
+        order: prompts.getSectionOrder('TOOL_GREP'),
+        text: 'Use the grep and glob tools — not shell grep, rg, or find — to search files inside WSL.',
+      })
     })
-  }
+  })
 }
